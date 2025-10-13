@@ -1,0 +1,33 @@
+{
+  "name": "amazon-ads-api-integration",
+  "version": "1.0.0",
+  "description": "Amazon Ads API Integration for Vendor Central with daily data sync",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "sync": "node src/sync.js",
+    "export": "node src/export.js",
+    "setup-db": "node src/database/setup.js",
+    "dev": "nodemon src/index.js"
+  },
+  "keywords": [
+    "amazon-ads",
+    "api",
+    "vendor-central",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "pg": "^8.11.3",
+    "node-cron": "^3.0.2",
+    "winston": "^3.11.0",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
+
