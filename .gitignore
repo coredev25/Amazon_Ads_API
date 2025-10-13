@@ -13,3 +13,50 @@ reports/
 # Keep the example CA certificate, but ignore custom ones
 !ca-certificate.pem
 
+venv/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+.tox/
+coverage.*
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+.cache/
+*.sqlite3
+*.db
+*.pot
+*.mo
+
+# Environments
+.env.*
+.envrc
+.env.bak
+*.env
+*.venv
+.venv/
+env/
+ENV/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# macOS
+.DS_Store
+
