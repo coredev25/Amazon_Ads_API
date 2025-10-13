@@ -36,6 +36,20 @@ class Database {
   }
 
   /**
+   * Test database connection
+   */
+  async testConnection() {
+    try {
+      const result = await this.pool.query('SELECT NOW()');
+      logger.info('Database connection test successful');
+      return true;
+    } catch (error) {
+      logger.error('Database connection test failed', error);
+      return false;
+    }
+  }
+
+  /**
    * Close all connections
    */
   async close() {
