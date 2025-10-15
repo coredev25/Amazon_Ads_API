@@ -128,8 +128,8 @@ class RecommendationEngine:
         # Calculate final adjustment
         final_adjustment = weighted_adjustment / total_weight
         
-        # Apply bid limits
-        current_bid = entity_info.get('bid', entity_info.get('default_bid', 0))
+        # Apply bid limits - convert decimal to float
+        current_bid = float(entity_info.get('bid', entity_info.get('default_bid', 0)))
         new_bid = current_bid + final_adjustment
         
         # Apply bid floor and cap
@@ -185,7 +185,7 @@ class RecommendationEngine:
         # Use the first budget result (there should typically be only one)
         result = budget_results[0]
         
-        current_budget = entity_info.get('budget_amount', 0)
+        current_budget = float(entity_info.get('budget_amount', 0))
         new_budget = current_budget + result.recommended_adjustment
         
         # Apply budget limits

@@ -91,10 +91,10 @@ class ACOSRule(BaseRule):
         if not performance_data:
             return None
         
-        # Calculate current ACOS
-        total_cost = sum(record.get('cost', 0) for record in performance_data)
-        total_sales = sum(record.get('attributed_sales_7d', 0) for record in performance_data)
-        total_conversions = sum(record.get('attributed_conversions_7d', 0) for record in performance_data)
+        # Calculate current ACOS - convert decimal to float
+        total_cost = sum(float(record.get('cost', 0)) for record in performance_data)
+        total_sales = sum(float(record.get('attributed_sales_7d', 0)) for record in performance_data)
+        total_conversions = sum(float(record.get('attributed_conversions_7d', 0)) for record in performance_data)
         
         if total_sales == 0 or total_conversions < self.min_conversions:
             return None
@@ -119,8 +119,8 @@ class ACOSRule(BaseRule):
             severity = 'low'  # Low severity for increasing bids
             reason = f"ACOS {current_acos:.3f} below target {self.target_acos:.3f} by {acos_deviation:.3f}"
         
-        # Calculate recommended bid adjustment
-        current_bid = entity_info.get('bid', entity_info.get('default_bid', 0))
+        # Calculate recommended bid adjustment - convert decimal to float
+        current_bid = float(entity_info.get('bid', entity_info.get('default_bid', 0)))
         recommended_adjustment = current_bid * adjustment_multiplier
         
         # Calculate confidence based on data quality
@@ -175,10 +175,10 @@ class ROASRule(BaseRule):
         if not performance_data:
             return None
         
-        # Calculate current ROAS
-        total_cost = sum(record.get('cost', 0) for record in performance_data)
-        total_sales = sum(record.get('attributed_sales_7d', 0) for record in performance_data)
-        total_conversions = sum(record.get('attributed_conversions_7d', 0) for record in performance_data)
+        # Calculate current ROAS - convert decimal to float
+        total_cost = sum(float(record.get('cost', 0)) for record in performance_data)
+        total_sales = sum(float(record.get('attributed_sales_7d', 0)) for record in performance_data)
+        total_conversions = sum(float(record.get('attributed_conversions_7d', 0)) for record in performance_data)
         
         if total_cost == 0 or total_conversions < self.min_conversions:
             return None
@@ -203,8 +203,8 @@ class ROASRule(BaseRule):
             severity = 'low'  # Low severity for increasing bids
             reason = f"ROAS {current_roas:.2f} above target {self.target_roas:.2f} by {roas_deviation:.2f}"
         
-        # Calculate recommended bid adjustment
-        current_bid = entity_info.get('bid', entity_info.get('default_bid', 0))
+        # Calculate recommended bid adjustment - convert decimal to float
+        current_bid = float(entity_info.get('bid', entity_info.get('default_bid', 0)))
         recommended_adjustment = current_bid * adjustment_multiplier
         
         # Calculate confidence based on data quality
@@ -259,9 +259,9 @@ class CTRRule(BaseRule):
         if not performance_data:
             return None
         
-        # Calculate current CTR
-        total_impressions = sum(record.get('impressions', 0) for record in performance_data)
-        total_clicks = sum(record.get('clicks', 0) for record in performance_data)
+        # Calculate current CTR - convert decimal to float
+        total_impressions = sum(float(record.get('impressions', 0)) for record in performance_data)
+        total_clicks = sum(float(record.get('clicks', 0)) for record in performance_data)
         
         if total_impressions < self.min_impressions:
             return None
@@ -287,8 +287,8 @@ class CTRRule(BaseRule):
         
         reason = f"CTR {current_ctr:.2f}% below minimum {self.minimum_ctr:.2f}% (ratio: {ctr_ratio:.2f})"
         
-        # Calculate recommended bid adjustment
-        current_bid = entity_info.get('bid', entity_info.get('default_bid', 0))
+        # Calculate recommended bid adjustment - convert decimal to float
+        current_bid = float(entity_info.get('bid', entity_info.get('default_bid', 0)))
         recommended_adjustment = current_bid * adjustment_multiplier
         
         # Calculate confidence based on data quality
@@ -329,9 +329,9 @@ class NegativeKeywordRule(BaseRule):
         if not performance_data:
             return None
         
-        # Calculate current CTR
-        total_impressions = sum(record.get('impressions', 0) for record in performance_data)
-        total_clicks = sum(record.get('clicks', 0) for record in performance_data)
+        # Calculate current CTR - convert decimal to float
+        total_impressions = sum(float(record.get('impressions', 0)) for record in performance_data)
+        total_clicks = sum(float(record.get('clicks', 0)) for record in performance_data)
         
         if total_impressions < self.impression_threshold:
             return None
@@ -394,16 +394,16 @@ class BudgetRule(BaseRule):
         if not performance_data:
             return None
         
-        # Calculate performance metrics
-        total_cost = sum(record.get('cost', 0) for record in performance_data)
-        total_sales = sum(record.get('attributed_sales_7d', 0) for record in performance_data)
-        total_conversions = sum(record.get('attributed_conversions_7d', 0) for record in performance_data)
+        # Calculate performance metrics - convert decimal to float
+        total_cost = sum(float(record.get('cost', 0)) for record in performance_data)
+        total_sales = sum(float(record.get('attributed_sales_7d', 0)) for record in performance_data)
+        total_conversions = sum(float(record.get('attributed_conversions_7d', 0)) for record in performance_data)
         
         if total_conversions < self.min_conversions:
             return None
         
         current_roas = total_sales / total_cost if total_cost > 0 else 0
-        current_budget = entity_info.get('budget_amount', 0)
+        current_budget = float(entity_info.get('budget_amount', 0))
         
         # Determine budget adjustment based on ROAS
         if current_roas > 3.0:  # High ROAS - increase budget

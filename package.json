@@ -8,7 +8,11 @@
     "sync": "node src/sync.js",
     "export": "node src/export.js",
     "setup-db": "node src/database/setup.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "dashboard": "streamlit run dashboard/app.py",
+    "test": "npm run test:api && npm run test:sync",
+    "test:api": "node tests/test_api.js",
+    "test:sync": "node tests/test_sync.js"
   },
   "keywords": [
     "amazon-ads",
