@@ -11,6 +11,14 @@ from .config import RuleConfig
 from .database import DatabaseConnector
 from .rules import ACOSRule, ROASRule, CTRRule, NegativeKeywordRule, BudgetRule
 from .recommendations import RecommendationEngine, Recommendation
+from .intelligence_engines import (
+    IntelligenceOrchestrator, IntelligenceSignal,
+    DataIntelligenceEngine, KeywordIntelligenceEngine,
+    LongTailEngine, RankingEngine, SeasonalityEngine, ProfitEngine
+)
+from .negative_manager import NegativeKeywordManager, NegativeKeywordCandidate
+from .bid_optimizer import BidOptimizationEngine, BudgetOptimizationEngine, BidOptimization
+from .learning_loop import LearningLoop, ModelTrainer
 
 
 class AIRuleEngine:
@@ -28,7 +36,7 @@ class AIRuleEngine:
         self.db = db_connector
         self.logger = logging.getLogger(__name__)
         
-        # Initialize rules
+        # Initialize traditional rules
         self.rules = {
             'acos': ACOSRule(config.__dict__),
             'roas': ROASRule(config.__dict__),
@@ -39,6 +47,34 @@ class AIRuleEngine:
         
         # Initialize recommendation engine
         self.recommendation_engine = RecommendationEngine(config)
+        
+        # Initialize intelligence engines (if enabled)
+        if config.enable_intelligence_engines:
+            self.intelligence_orchestrator = IntelligenceOrchestrator(config.__dict__)
+            self.logger.info("Intelligence engines initialized")
+        else:
+            self.intelligence_orchestrator = None
+        
+        # Initialize negative keyword manager
+        self.negative_manager = NegativeKeywordManager(config.__dict__)
+        
+        # Initialize bid optimization engine (if enabled)
+        if config.enable_advanced_bid_optimization:
+            self.bid_optimizer = BidOptimizationEngine(config.__dict__)
+            self.budget_optimizer = BudgetOptimizationEngine(config.__dict__)
+            self.logger.info("Advanced bid optimization enabled")
+        else:
+            self.bid_optimizer = None
+            self.budget_optimizer = None
+        
+        # Initialize learning loop (if enabled)
+        if config.enable_learning_loop:
+            self.learning_loop = LearningLoop(config.__dict__)
+            self.model_trainer = ModelTrainer(config.__dict__)
+            self.logger.info("Learning loop enabled")
+        else:
+            self.learning_loop = None
+            self.model_trainer = None
         
         # Track recent adjustments for cooldown enforcement
         self.recent_adjustments = {}
@@ -150,7 +186,61 @@ class AIRuleEngine:
         }
         entity_data.update(entity_info)
         
-        # Evaluate all rules
+        # Run intelligence engines if enabled
+        intelligence_signals = []
+        if self.intelligence_orchestrator:
+            try:
+                intelligence_signals = self.intelligence_orchestrator.analyze_entity(
+                    entity_data, performance_data
+                )
+                if intelligence_signals:
+                    self.logger.debug(f"Intelligence engines generated {len(intelligence_signals)} signals for {entity_type} {entity_id}")
+            except Exception as e:
+                self.logger.error(f"Error running intelligence engines for {entity_type} {entity_id}: {e}")
+        
+        # Use advanced bid optimization if enabled
+        if self.bid_optimizer and entity_type in ['keyword', 'ad_group']:
+            try:
+                bid_optimization = self.bid_optimizer.calculate_optimal_bid(
+                    entity_data, performance_data, intelligence_signals
+                )
+                
+                if bid_optimization:
+                    # Convert to Recommendation format
+                    recommendation = Recommendation(
+                        entity_type=bid_optimization.entity_type,
+                        entity_id=bid_optimization.entity_id,
+                        entity_name=bid_optimization.entity_name,
+                        adjustment_type='bid',
+                        current_value=bid_optimization.current_bid,
+                        recommended_value=bid_optimization.recommended_bid,
+                        adjustment_amount=bid_optimization.adjustment_amount,
+                        adjustment_percentage=bid_optimization.adjustment_percentage,
+                        priority=bid_optimization.priority,
+                        confidence=bid_optimization.confidence,
+                        reason=bid_optimization.reason,
+                        rules_triggered=['BID_OPTIMIZER'],
+                        metadata=bid_optimization.metadata,
+                        created_at=datetime.now()
+                    )
+                    
+                    # Record adjustment for cooldown tracking
+                    self._record_adjustment(entity_type, entity_id)
+                    
+                    # Track recommendation in learning loop if enabled
+                    if self.learning_loop:
+                        try:
+                            self.learning_loop.track_recommendation(
+                                recommendation.__dict__, entity_id, entity_type
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Error tracking recommendation: {e}")
+                    
+                    return [recommendation]
+            except Exception as e:
+                self.logger.error(f"Error in bid optimization for {entity_type} {entity_id}: {e}")
+        
+        # Fall back to traditional rules
         rule_results = []
         for rule_name, rule in self.rules.items():
             try:
@@ -287,6 +377,95 @@ class AIRuleEngine:
                 ])
         
         self.logger.info(f"Exported {len(recommendations)} recommendations to {output_path}")
+    
+    def get_intelligence_insights(self, days: int = 30) -> Dict[str, Any]:
+        """Get insights from intelligence engines and learning loop"""
+        insights = {
+            'intelligence_enabled': self.intelligence_orchestrator is not None,
+            'learning_enabled': self.learning_loop is not None,
+            'advanced_optimization_enabled': self.bid_optimizer is not None
+        }
+        
+        # Get learning loop performance
+        if self.learning_loop:
+            try:
+                learning_trends = self.learning_loop.analyze_performance_trends(days=days)
+                insights['learning_performance'] = learning_trends
+            except Exception as e:
+                self.logger.error(f"Error getting learning trends: {e}")
+                insights['learning_performance'] = None
+        
+        return insights
+    
+    def get_negative_keyword_candidates(self, campaign_id: int) -> List[Dict[str, Any]]:
+        """Get negative keyword candidates for a campaign"""
+        if not self.negative_manager:
+            return []
+        
+        candidates = []
+        
+        # Get keywords for campaign
+        ad_groups = self.db.get_ad_groups_with_performance(
+            campaign_id, self.config.performance_lookback_days
+        )
+        
+        for ad_group in ad_groups:
+            ad_group_id = ad_group['ad_group_id']
+            keywords = self.db.get_keywords_with_performance(
+                ad_group_id, self.config.performance_lookback_days
+            )
+            
+            for keyword in keywords:
+                keyword_id = keyword['keyword_id']
+                performance = self.db.get_keyword_performance(
+                    keyword_id, self.config.performance_lookback_days
+                )
+                
+                candidate = self.negative_manager.identify_negative_candidates(
+                    keyword, performance
+                )
+                
+                if candidate:
+                    candidates.append({
+                        'keyword_id': candidate.keyword_id,
+                        'keyword_text': candidate.keyword_text,
+                        'match_type': candidate.match_type,
+                        'ctr': candidate.ctr,
+                        'impressions': candidate.impressions,
+                        'cost': candidate.cost,
+                        'reason': candidate.reason,
+                        'severity': candidate.severity,
+                        'confidence': candidate.confidence,
+                        'suggested_match_type': candidate.suggested_match_type
+                    })
+        
+        return candidates
+    
+    def export_intelligence_report(self, output_path: str) -> None:
+        """Export comprehensive intelligence report"""
+        report = {
+            'exported_at': datetime.now().isoformat(),
+            'engine_status': {
+                'intelligence_engines': self.intelligence_orchestrator is not None,
+                'learning_loop': self.learning_loop is not None,
+                'advanced_bid_optimization': self.bid_optimizer is not None,
+                'negative_manager': self.negative_manager is not None
+            },
+            'insights': self.get_intelligence_insights(days=30),
+            'configuration': {
+                'enable_intelligence_engines': self.config.enable_intelligence_engines,
+                'enable_learning_loop': self.config.enable_learning_loop,
+                'enable_advanced_bid_optimization': self.config.enable_advanced_bid_optimization,
+                'target_acos': self.config.acos_target,
+                'target_roas': self.config.roas_target,
+                'seasonal_boost_factor': self.config.seasonal_boost_factor
+            }
+        }
+        
+        with open(output_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        self.logger.info(f"Exported intelligence report to {output_path}")
     
     def get_rule_documentation(self) -> Dict[str, Any]:
         """Get documentation for all rules"""

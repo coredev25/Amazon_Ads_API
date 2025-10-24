@@ -54,6 +54,43 @@ class RuleConfig:
     max_daily_adjustments: int = 3  # Maximum adjustments per day per entity
     cooldown_hours: int = 6  # Hours between adjustments for same entity
     
+    # Intelligence Engine Configuration
+    high_performer_roas: float = 5.0  # ROAS threshold for high performers
+    long_tail_min_words: int = 3  # Minimum words for long-tail keywords
+    target_impression_share: float = 0.5  # Target impression share
+    
+    # Seasonality Configuration
+    seasonal_boost_factor: float = 1.5  # Seasonal boost multiplier
+    
+    # Profit Engine Configuration
+    target_profit_margin: float = 0.30  # Target profit margin (30%)
+    min_profit_threshold: float = 0.15  # Minimum acceptable profit margin (15%)
+    
+    # Negative Keyword Manager Configuration
+    negative_zero_conversion_threshold: int = 500  # Impressions before flagging zero conversions
+    negative_high_cost_threshold: float = 50.0  # Cost threshold for zero-conversion keywords
+    
+    # Bid Optimization Weights
+    weight_performance: float = 0.40  # Weight for performance metrics
+    weight_intelligence: float = 0.30  # Weight for intelligence signals
+    weight_seasonality: float = 0.15  # Weight for seasonal factors
+    weight_profit: float = 0.15  # Weight for profit optimization
+    
+    # Budget Optimization
+    aggressive_scale_roas: float = 5.0  # ROAS threshold for aggressive budget scaling
+    
+    # Learning Loop Configuration
+    learning_success_threshold: float = 0.10  # 10% improvement = success
+    learning_failure_threshold: float = -0.05  # -5% decline = failure
+    learning_evaluation_days: int = 7  # Days to evaluate outcomes
+    min_training_samples: int = 100  # Minimum samples for ML training
+    
+    # Engine Feature Flags
+    enable_intelligence_engines: bool = True
+    enable_learning_loop: bool = True
+    enable_advanced_bid_optimization: bool = True
+    enable_profit_optimization: bool = True
+    
     @classmethod
     def from_file(cls, config_path: str) -> 'RuleConfig':
         """Load configuration from JSON file"""
@@ -94,7 +131,32 @@ class RuleConfig:
             'negative_keyword_ctr_threshold': self.negative_keyword_ctr_threshold,
             'negative_keyword_impression_threshold': self.negative_keyword_impression_threshold,
             'max_daily_adjustments': self.max_daily_adjustments,
-            'cooldown_hours': self.cooldown_hours
+            'cooldown_hours': self.cooldown_hours,
+            # Intelligence Engines
+            'high_performer_roas': self.high_performer_roas,
+            'long_tail_min_words': self.long_tail_min_words,
+            'target_impression_share': self.target_impression_share,
+            'seasonal_boost_factor': self.seasonal_boost_factor,
+            'target_profit_margin': self.target_profit_margin,
+            'min_profit_threshold': self.min_profit_threshold,
+            'negative_zero_conversion_threshold': self.negative_zero_conversion_threshold,
+            'negative_high_cost_threshold': self.negative_high_cost_threshold,
+            # Bid Optimization
+            'weight_performance': self.weight_performance,
+            'weight_intelligence': self.weight_intelligence,
+            'weight_seasonality': self.weight_seasonality,
+            'weight_profit': self.weight_profit,
+            'aggressive_scale_roas': self.aggressive_scale_roas,
+            # Learning Loop
+            'learning_success_threshold': self.learning_success_threshold,
+            'learning_failure_threshold': self.learning_failure_threshold,
+            'learning_evaluation_days': self.learning_evaluation_days,
+            'min_training_samples': self.min_training_samples,
+            # Feature Flags
+            'enable_intelligence_engines': self.enable_intelligence_engines,
+            'enable_learning_loop': self.enable_learning_loop,
+            'enable_advanced_bid_optimization': self.enable_advanced_bid_optimization,
+            'enable_profit_optimization': self.enable_profit_optimization
         }
         
         with open(config_path, 'w') as f:

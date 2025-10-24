@@ -95,6 +95,18 @@ class AmazonAdsClient {
         throw new Error('Authentication failed. Please check your API credentials.');
       } else if (error.response?.status === 403) {
         throw new Error('Access forbidden. Please check your API permissions and profile ID.');
+      } else if (error.response?.status === 425) {
+        // Handle duplicate report requests - extract the duplicate report ID
+        const errorDetail = error.response.data?.detail || '';
+        const reportIdMatch = errorDetail.match(/duplicate of : ([a-f0-9-]+)/);
+        if (reportIdMatch) {
+          const duplicateReportId = reportIdMatch[1];
+          logger.info(`Report request is a duplicate of existing report: ${duplicateReportId}`);
+          logger.info(`Using existing report instead of creating a new one`);
+          // Return the duplicate report ID instead of throwing an error
+          return { reportId: duplicateReportId };
+        }
+        throw new Error(`Duplicate request detected: ${errorDetail}`);
       }
       
       throw error;
@@ -139,44 +151,101 @@ class AmazonAdsClient {
   }
 
   /**
-   * Request a performance report
+   * Request a performance report using v3 API
+   * According to: https://advertising.amazon.com/API/docs/en-us/guides/reporting/v3/report-types/overview
    */
   async requestReport(reportType, reportDate, metrics) {
-    logger.info(`Requesting ${reportType} report for ${reportDate}...`);
+    logger.info(`Requesting ${reportType} report for ${reportDate} using v3 API...`);
 
-    const reportConfig = {
-      reportDate,
-      metrics: metrics || this.getDefaultMetrics(reportType)
+    const metricsArray = metrics || this.getDefaultMetrics(reportType);
+    const reportTypeMap = {
+      'campaigns': 'spCampaigns',
+      'adGroups': 'spAdGroups',
+      'keywords': 'spKeywords'
     };
 
-    const response = await this.makeRequest('POST', `/v2/${reportType}/report`, reportConfig);
+    // Convert YYYYMMDD format to YYYY-MM-DD format for API
+    const formattedDate = this.formatDateForAPI(reportDate);
+
+    // v3 API format - dates go at top level, not inside configuration
+    const reportConfig = {
+      name: `${reportType}_${reportDate}`,
+      startDate: formattedDate,  // Dates are at top level in YYYY-MM-DD format
+      endDate: formattedDate,
+      configuration: {
+        adProduct: 'SPONSORED_PRODUCTS',
+        groupBy: [reportType === 'campaigns' ? 'campaign' : reportType === 'adGroups' ? 'adGroup' : 'keyword'],
+        columns: metricsArray,
+        reportTypeId: reportTypeMap[reportType],
+        timeUnit: 'DAILY',
+        format: 'GZIP_JSON'
+      }
+    };
+
+    logger.debug('v3 Report request config:', reportConfig);
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig);
     return response.reportId;
   }
 
   /**
-   * Get report status
+   * Convert date from YYYYMMDD format to YYYY-MM-DD format for API
    */
-  async getReportStatus(reportId) {
-    return await this.makeRequest('GET', `/v2/reports/${reportId}`);
+  formatDateForAPI(apiDate) {
+    if (apiDate.includes('-')) return apiDate; // Already formatted
+    // Convert 20251022 to 2025-10-22
+    return `${apiDate.substr(0, 4)}-${apiDate.substr(4, 2)}-${apiDate.substr(6, 2)}`;
   }
 
   /**
-   * Download report data
+   * Get report status using v3 API
+   */
+  async getReportStatus(reportId) {
+    return await this.makeRequest('GET', `/reporting/reports/${reportId}`);
+  }
+
+  /**
+   * Download report data from v3 API
+   * v3 API returns GZIP compressed JSON data
    */
   async downloadReport(reportUrl) {
     try {
+      const zlib = require('zlib');
+      const { promisify } = require('util');
+      const gunzip = promisify(zlib.gunzip);
+
+      logger.info(`Downloading report from: ${reportUrl}`);
+      
+      // Download the gzipped report file
       const response = await axios.get(reportUrl, {
-        responseType: 'json'
+        responseType: 'arraybuffer',  // Get as buffer for decompression
+        timeout: 60000  // 60 second timeout for large files
       });
-      return response.data;
+
+      logger.debug(`Downloaded ${response.data.length} bytes (compressed)`);
+
+      // Decompress gzip data
+      const decompressed = await gunzip(response.data);
+      logger.debug(`Decompressed to ${decompressed.length} bytes`);
+      
+      // Parse JSON
+      const jsonData = JSON.parse(decompressed.toString('utf-8'));
+      
+      logger.info(`Report downloaded successfully, records: ${Array.isArray(jsonData) ? jsonData.length : Object.keys(jsonData).length}`);
+      return jsonData;
     } catch (error) {
-      logger.error('Error downloading report:', error.message);
-      throw error;
+      logger.error('Error downloading report:', {
+        message: error.message,
+        url: reportUrl,
+        stack: error.stack
+      });
+      throw new Error(`Failed to download/decompress report: ${error.message}`);
     }
   }
 
   /**
    * Get default metrics for a report type
+   * Updated for Amazon Ads API v3 with correct column names
    */
   getDefaultMetrics(reportType) {
     const metricsMap = {
@@ -187,40 +256,37 @@ class AmazonAdsClient {
         'impressions',
         'clicks',
         'cost',
-        'attributedConversions1d',
-        'attributedConversions7d',
-        'attributedConversions14d',
-        'attributedConversions30d',
-        'attributedSales1d',
-        'attributedSales7d',
-        'attributedSales14d',
-        'attributedSales30d'
+        'purchases1d',
+        'purchases7d',
+        'purchases14d',
+        'purchases30d',
+        'sales1d',
+        'sales7d',
+        'sales14d',
+        'sales30d'
       ],
       adGroups: [
         'campaignId',
         'adGroupId',
-        'adGroupName',
         'impressions',
         'clicks',
         'cost',
-        'attributedConversions1d',
-        'attributedConversions7d',
-        'attributedSales1d',
-        'attributedSales7d'
+        'purchases1d',
+        'purchases7d',
+        'sales1d',
+        'sales7d'
       ],
       keywords: [
         'campaignId',
         'adGroupId',
         'keywordId',
-        'keywordText',
-        'matchType',
         'impressions',
         'clicks',
         'cost',
-        'attributedConversions1d',
-        'attributedConversions7d',
-        'attributedSales1d',
-        'attributedSales7d'
+        'purchases1d',
+        'purchases7d',
+        'sales1d',
+        'sales7d'
       ]
     };
 
@@ -228,32 +294,67 @@ class AmazonAdsClient {
   }
 
   /**
-   * Wait for report to be ready and download it
+   * Wait for report to be ready and download it (v3 API)
+   * v3 API statuses: PENDING, PROCESSING, COMPLETED, FAILED
+   * Similar to Python sample's status checking loop
    */
-  async waitAndDownloadReport(reportId, maxAttempts = 30, delayMs = 10000) {
+  async waitAndDownloadReport(reportId, maxAttempts = 60, delayMs = 30000) {
+    logger.info(`Starting report status check for ${reportId}...`);
+    
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const status = await this.getReportStatus(reportId);
+      try {
+        const statusResponse = await this.getReportStatus(reportId);
 
-      if (status.status === 'SUCCESS') {
-        logger.info(`Report ${reportId} is ready, downloading...`);
-        return await this.downloadReport(status.location);
-      } else if (status.status === 'FAILURE') {
-        throw new Error(`Report ${reportId} generation failed`);
+        logger.info(`Report ${reportId} status: ${statusResponse.status} (attempt ${attempt + 1}/${maxAttempts})`);
+
+        if (statusResponse.status === 'COMPLETED' || statusResponse.status === 'SUCCESS') {
+          logger.info(`Report ${reportId} is ready, downloading...`);
+          
+          // Get download URL (v3 uses 'url', v2 uses 'location')
+          const downloadUrl = statusResponse.url || statusResponse.location;
+          
+          if (!downloadUrl) {
+            throw new Error('Report completed but no download URL provided');
+          }
+          
+          return await this.downloadReport(downloadUrl);
+        } else if (statusResponse.status === 'FAILED' || statusResponse.status === 'FAILURE') {
+          const errorDetail = statusResponse.failureReason || statusResponse.statusDetails || 'Unknown error';
+          throw new Error(`Report ${reportId} generation failed: ${errorDetail}`);
+        } else if (statusResponse.status === 'IN_PROGRESS' || statusResponse.status === 'PROCESSING' || statusResponse.status === 'PENDING') {
+          // Use exponential backoff for longer waits
+          const waitTime = Math.min(delayMs * Math.pow(1.2, Math.floor(attempt / 5)), 120000); // Max 2 minutes
+          logger.info(`Report generation in progress, waiting ${waitTime / 1000} seconds...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        } else {
+          logger.warn(`Unknown report status: ${statusResponse.status}`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      } catch (error) {
+        if (error.message.includes('generation failed')) {
+          throw error; // Don't retry if report generation explicitly failed
+        }
+        logger.warn(`Error checking report status (attempt ${attempt + 1}/${maxAttempts}):`, error.message);
+        
+        if (attempt === maxAttempts - 1) {
+          throw error; // Throw on last attempt
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
-
-      logger.info(`Report ${reportId} status: ${status.status}, waiting...`);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 
-    throw new Error(`Report ${reportId} timed out after ${maxAttempts} attempts`);
+    throw new Error(`Report ${reportId} timed out after ${maxAttempts} attempts (${(maxAttempts * delayMs) / 60000} minutes)`);
   }
 
   /**
-   * Get performance data for a date range
+   * Get performance data for a date range using v3 API
+   * v3 API supports date ranges natively
    */
   async getPerformanceData(reportType, startDate, endDate) {
-    logger.info(`Fetching ${reportType} performance data from ${startDate} to ${endDate}...`);
+    logger.info(`Fetching ${reportType} performance data for ${startDate} using v3 API...`);
 
+    // v3 API can handle both startDate and endDate (for now, using single date)
     const reportId = await this.requestReport(reportType, startDate);
     const reportData = await this.waitAndDownloadReport(reportId);
 

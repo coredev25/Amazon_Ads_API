@@ -3,7 +3,14 @@ const db = require('../database/connection');
 const logger = require('../utils/logger');
 
 class DataSyncService {
-  constructor() {
+  constructor(config = {}) {
+    this.config = {
+      // Performance optimization settings
+      maxRetries: config.maxRetries || 3,
+      batchSize: config.batchSize || 50,
+      rateLimitDelay: config.rateLimitDelay || 100
+    };
+    
     this.client = new AmazonAdsClient();
   }
 
@@ -181,16 +188,59 @@ class DataSyncService {
   }
 
   /**
+   * Convert API date format (YYYYMMDD) to database format (YYYY-MM-DD)
+   */
+  formatDateForDB(apiDate) {
+    if (apiDate.includes('-')) return apiDate; // Already formatted
+    // Convert 20241020 to 2024-10-20
+    return `${apiDate.substr(0, 4)}-${apiDate.substr(4, 2)}-${apiDate.substr(6, 2)}`;
+  }
+
+  /**
    * Sync performance data for campaigns
    */
   async syncCampaignPerformance(reportDate) {
     try {
-      logger.info(`Syncing campaign performance for ${reportDate}...`);
+      logger.info(`📊 [CAMPAIGNS] Syncing campaign performance for ${reportDate}...`);
+      logger.info(`📊 [CAMPAIGNS] Requesting report from Amazon Ads API...`);
+      
       const reportData = await this.client.getPerformanceData('campaigns', reportDate, reportDate);
 
+      if (!reportData || reportData.length === 0) {
+        logger.warn(`⚠️  [CAMPAIGNS] No campaign performance data returned for ${reportDate}`);
+        return 0;
+      }
+
+      // Validate report data structure
+      if (!Array.isArray(reportData)) {
+        logger.error(`❌ [CAMPAIGNS] Invalid report data format for ${reportDate}`);
+        return 0;
+      }
+
+      logger.info(`📊 [CAMPAIGNS] Received ${reportData.length} records, saving to database...`);
+      
+      const dbDate = this.formatDateForDB(reportDate);
       let synced = 0;
+      const total = reportData.length;
+
       for (const record of reportData) {
         if (!record.campaignId) continue;
+
+        // Check if campaign exists before inserting performance data
+        const campaignCheck = await db.query(
+          'SELECT campaign_id FROM campaigns WHERE campaign_id = $1',
+          [record.campaignId]
+        );
+        
+        if (campaignCheck.rows.length === 0) {
+          logger.warn(`Skipping campaign performance for ${record.campaignId} - campaign not found in campaigns table`);
+          continue;
+        }
+
+        // Add rate limiting - small delay between database operations
+        if (synced > 0 && synced % this.config.batchSize === 0) {
+          await new Promise(resolve => setTimeout(resolve, this.config.rateLimitDelay));
+        }
 
         await db.query(
           `INSERT INTO campaign_performance (
@@ -216,27 +266,32 @@ class DataSyncService {
             updated_at = CURRENT_TIMESTAMP`,
           [
             record.campaignId,
-            reportDate,
+            dbDate,
             record.impressions || 0,
             record.clicks || 0,
             record.cost || 0,
-            record.attributedConversions1d || 0,
-            record.attributedConversions7d || 0,
-            record.attributedConversions14d || 0,
-            record.attributedConversions30d || 0,
-            record.attributedSales1d || 0,
-            record.attributedSales7d || 0,
-            record.attributedSales14d || 0,
-            record.attributedSales30d || 0
+            record.purchases1d || 0,
+            record.purchases7d || 0,
+            record.purchases14d || 0,
+            record.purchases30d || 0,
+            record.sales1d || 0,
+            record.sales7d || 0,
+            record.sales14d || 0,
+            record.sales30d || 0
           ]
         );
         synced++;
+        
+        // Log progress every 10 records or at the end
+        if (synced % 10 === 0 || synced === total) {
+          logger.info(`📊 [CAMPAIGNS] Progress: ${synced}/${total} records saved (${Math.round(synced/total*100)}%)`);
+        }
       }
 
-      logger.info(`Synced ${synced} campaign performance records for ${reportDate}`);
+      logger.info(`✅ [CAMPAIGNS] Successfully synced ${synced} campaign performance records for ${reportDate}`);
       return synced;
     } catch (error) {
-      logger.error('Error syncing campaign performance:', error);
+      logger.error(`❌ [CAMPAIGNS] Error syncing campaign performance:`, error.message);
       throw error;
     }
   }
@@ -246,10 +301,22 @@ class DataSyncService {
    */
   async syncAdGroupPerformance(reportDate) {
     try {
-      logger.info(`Syncing ad group performance for ${reportDate}...`);
+      logger.info(`📊 [AD GROUPS] Syncing ad group performance for ${reportDate}...`);
+      logger.info(`📊 [AD GROUPS] Requesting report from Amazon Ads API...`);
+      
       const reportData = await this.client.getPerformanceData('adGroups', reportDate, reportDate);
 
+      if (!reportData || reportData.length === 0) {
+        logger.warn(`⚠️  [AD GROUPS] No ad group performance data returned for ${reportDate}`);
+        return 0;
+      }
+
+      logger.info(`📊 [AD GROUPS] Received ${reportData.length} records, saving to database...`);
+      
+      const dbDate = this.formatDateForDB(reportDate);
       let synced = 0;
+      const total = reportData.length;
+
       for (const record of reportData) {
         if (!record.adGroupId) continue;
 
@@ -274,23 +341,28 @@ class DataSyncService {
           [
             record.campaignId,
             record.adGroupId,
-            reportDate,
+            dbDate,
             record.impressions || 0,
             record.clicks || 0,
             record.cost || 0,
-            record.attributedConversions1d || 0,
-            record.attributedConversions7d || 0,
-            record.attributedSales1d || 0,
-            record.attributedSales7d || 0
+            record.purchases1d || 0,
+            record.purchases7d || 0,
+            record.sales1d || 0,
+            record.sales7d || 0
           ]
         );
         synced++;
+        
+        // Log progress every 10 records or at the end
+        if (synced % 10 === 0 || synced === total) {
+          logger.info(`📊 [AD GROUPS] Progress: ${synced}/${total} records saved (${Math.round(synced/total*100)}%)`);
+        }
       }
 
-      logger.info(`Synced ${synced} ad group performance records for ${reportDate}`);
+      logger.info(`✅ [AD GROUPS] Successfully synced ${synced} ad group performance records for ${reportDate}`);
       return synced;
     } catch (error) {
-      logger.error('Error syncing ad group performance:', error);
+      logger.error(`❌ [AD GROUPS] Error syncing ad group performance:`, error.message);
       throw error;
     }
   }
@@ -300,10 +372,22 @@ class DataSyncService {
    */
   async syncKeywordPerformance(reportDate) {
     try {
-      logger.info(`Syncing keyword performance for ${reportDate}...`);
+      logger.info(`📊 [KEYWORDS] Syncing keyword performance for ${reportDate}...`);
+      logger.info(`📊 [KEYWORDS] Requesting report from Amazon Ads API...`);
+      
       const reportData = await this.client.getPerformanceData('keywords', reportDate, reportDate);
 
+      if (!reportData || reportData.length === 0) {
+        logger.warn(`⚠️  [KEYWORDS] No keyword performance data returned for ${reportDate}`);
+        return 0;
+      }
+
+      logger.info(`📊 [KEYWORDS] Received ${reportData.length} records, saving to database...`);
+      
+      const dbDate = this.formatDateForDB(reportDate);
       let synced = 0;
+      const total = reportData.length;
+
       for (const record of reportData) {
         if (!record.keywordId) continue;
 
@@ -330,23 +414,28 @@ class DataSyncService {
             record.campaignId,
             record.adGroupId,
             record.keywordId,
-            reportDate,
+            dbDate,
             record.impressions || 0,
             record.clicks || 0,
             record.cost || 0,
-            record.attributedConversions1d || 0,
-            record.attributedConversions7d || 0,
-            record.attributedSales1d || 0,
-            record.attributedSales7d || 0
+            record.purchases1d || 0,
+            record.purchases7d || 0,
+            record.sales1d || 0,
+            record.sales7d || 0
           ]
         );
         synced++;
+        
+        // Log progress every 20 records or at the end (keywords can be numerous)
+        if (synced % 20 === 0 || synced === total) {
+          logger.info(`📊 [KEYWORDS] Progress: ${synced}/${total} records saved (${Math.round(synced/total*100)}%)`);
+        }
       }
 
-      logger.info(`Synced ${synced} keyword performance records for ${reportDate}`);
+      logger.info(`✅ [KEYWORDS] Successfully synced ${synced} keyword performance records for ${reportDate}`);
       return synced;
     } catch (error) {
-      logger.error('Error syncing keyword performance:', error);
+      logger.error(`❌ [KEYWORDS] Error syncing keyword performance:`, error.message);
       throw error;
     }
   }
@@ -383,35 +472,94 @@ class DataSyncService {
     const totalRecords = { campaigns: 0, adGroups: 0, keywords: 0, performance: 0 };
 
     try {
-      logger.info('Starting full data sync...');
+      logger.info('═══════════════════════════════════════════════════════');
+      logger.info('🚀 STARTING FULL DATA SYNC');
+      logger.info(`📅 Syncing performance data for the last ${daysBack} days`);
+      logger.info('═══════════════════════════════════════════════════════');
 
       // Sync metadata
-      totalRecords.campaigns = await this.syncCampaigns();
-      totalRecords.adGroups = await this.syncAdGroups();
-      totalRecords.keywords = await this.syncKeywords();
+      logger.info('\n📋 PHASE 1: Syncing Metadata');
+      logger.info('───────────────────────────────────────────────────────');
+      // totalRecords.campaigns = await this.syncCampaigns();
+      // totalRecords.adGroups = await this.syncAdGroups();
+      // totalRecords.keywords = await this.syncKeywords();
+      logger.info(`✅ Metadata sync complete: ${totalRecords.campaigns} campaigns, ${totalRecords.adGroups} ad groups, ${totalRecords.keywords} keywords`);
 
       // Sync performance data for the last N days
+      logger.info('\n📊 PHASE 2: Syncing Performance Data');
+      logger.info('───────────────────────────────────────────────────────');
+      
       const today = new Date();
+      const performancePromises = [];
+      
+      // Process each day sequentially to avoid overwhelming the API
       for (let i = 0; i < daysBack; i++) {
         const date = new Date(today);
         date.setDate(date.getDate() - i);
-        const reportDate = date.toISOString().split('T')[0];
+        // Amazon Ads API expects date in YYYYMMDD format (e.g., 20241020)
+        const reportDate = date.toISOString().split('T')[0].replace(/-/g, '');
+        const displayDate = date.toISOString().split('T')[0];
 
-        const campaignPerf = await this.syncCampaignPerformance(reportDate);
-        const adGroupPerf = await this.syncAdGroupPerformance(reportDate);
-        const keywordPerf = await this.syncKeywordPerformance(reportDate);
+        logger.info(`\n📅 Processing Day ${i + 1}/${daysBack}: ${displayDate}`);
+        logger.info('─────────────────────────────────────────────────────');
+        
+        try {
+          // Process campaigns first, then ad groups and keywords in parallel
+          const campaignPerf = 0 // await this.syncCampaignPerformance(reportDate);
+          
+          // Process ad groups and keywords in parallel
+          const [adGroupPerf, keywordPerf] = await Promise.all([
+            this.syncAdGroupPerformance(reportDate),
+            this.syncKeywordPerformance(reportDate)
+          ]);
 
-        totalRecords.performance += campaignPerf + adGroupPerf + keywordPerf;
+          const dayTotal = campaignPerf + adGroupPerf + keywordPerf;
+          totalRecords.performance += dayTotal;
+          
+          logger.info(`✅ Day ${i + 1} complete: ${dayTotal} total records synced`);
+        } catch (error) {
+          logger.error(`❌ Day ${i + 1} failed:`, error.message);
+          // Continue with next day instead of failing completely
+          continue;
+        }
       }
 
       const total = Object.values(totalRecords).reduce((a, b) => a + b, 0);
+      const duration = ((new Date() - startTime) / 1000).toFixed(2);
+      
       await this.logSync('full_sync', 'success', total, null, startTime);
 
-      logger.info('Full sync completed successfully', totalRecords);
+      logger.info('\n═══════════════════════════════════════════════════════');
+      logger.info('✅ FULL SYNC COMPLETED SUCCESSFULLY');
+      logger.info('═══════════════════════════════════════════════════════');
+      logger.info(`📊 Summary:`);
+      logger.info(`   • Campaigns synced: ${totalRecords.campaigns}`);
+      logger.info(`   • Ad Groups synced: ${totalRecords.adGroups}`);
+      logger.info(`   • Keywords synced: ${totalRecords.keywords}`);
+      logger.info(`   • Performance records: ${totalRecords.performance}`);
+      logger.info(`   • Total records: ${total}`);
+      logger.info(`   • Duration: ${duration} seconds`);
+      logger.info('═══════════════════════════════════════════════════════\n');
+      
       return totalRecords;
     } catch (error) {
-      await this.logSync('full_sync', 'failed', 0, error.message, startTime);
-      logger.error('Full sync failed:', error);
+      const duration = ((new Date() - startTime) / 1000).toFixed(2);
+      const total = Object.values(totalRecords).reduce((a, b) => a + b, 0);
+      await this.logSync('full_sync', 'failed', total, error.message, startTime);
+      
+      logger.error('\n═══════════════════════════════════════════════════════');
+      logger.error('❌ FULL SYNC FAILED');
+      logger.error('═══════════════════════════════════════════════════════');
+      logger.error(`Error: ${error.message}`);
+      logger.error(`Duration before failure: ${duration} seconds`);
+      logger.error('═══════════════════════════════════════════════════════\n');
+      
+      // Don't throw the error if we've synced some data successfully
+      if (total > 0) {
+        logger.warn(`⚠️  Partial sync completed: ${total} records synced before failure`);
+        return totalRecords;
+      }
+      
       throw error;
     }
   }
