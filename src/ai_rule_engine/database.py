@@ -216,6 +216,7 @@ class DatabaseConnector:
         FROM campaigns c
         LEFT JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id 
             AND cp.report_date >= %s
+        WHERE c.campaign_status = 'enabled'
         GROUP BY c.campaign_id, c.campaign_name, c.campaign_status, c.budget_amount, c.budget_type
         ORDER BY total_cost DESC
         """
