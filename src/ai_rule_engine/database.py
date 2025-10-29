@@ -216,18 +216,15 @@ class DatabaseConnector:
         FROM campaigns c
         LEFT JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id 
             AND cp.report_date >= %s
-        WHERE c.campaign_status = 'enabled'
         GROUP BY c.campaign_id, c.campaign_name, c.campaign_status, c.budget_amount, c.budget_type
-        HAVING SUM(cp.impressions) >= %s
         ORDER BY total_cost DESC
         """
         
         start_date = datetime.now() - timedelta(days=days_back)
-        min_impressions = 100  # Minimum impressions threshold
         
         with self.get_connection() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute(query, (start_date, min_impressions))
+                cursor.execute(query, (start_date,))
                 return cursor.fetchall()
     
     def get_ad_groups_with_performance(self, campaign_id: int, days_back: int = 7) -> List[Dict[str, Any]]:
