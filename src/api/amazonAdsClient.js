@@ -167,6 +167,13 @@ class AmazonAdsClient {
     // Convert YYYYMMDD format to YYYY-MM-DD format for API
     const formattedDate = this.formatDateForAPI(reportDate);
 
+    // Fixed groupBy values according to Amazon Ads API v3 documentation
+    const groupByMap = {
+      'campaigns': ['campaign'],
+      'adGroups': ['adGroup'],
+      'keywords': ['keyword']
+    };
+
     // v3 API format - dates go at top level, not inside configuration
     const reportConfig = {
       name: `${reportType}_${reportDate}`,
@@ -174,7 +181,7 @@ class AmazonAdsClient {
       endDate: formattedDate,
       configuration: {
         adProduct: 'SPONSORED_PRODUCTS',
-        groupBy: [reportType === 'campaigns' ? 'campaign' : reportType === 'adGroups' ? 'adGroup' : 'keyword'],
+        groupBy: groupByMap[reportType],
         columns: metricsArray,
         reportTypeId: reportTypeMap[reportType],
         timeUnit: 'DAILY',
@@ -268,6 +275,7 @@ class AmazonAdsClient {
       adGroups: [
         'campaignId',
         'adGroupId',
+        'adGroupName',
         'impressions',
         'clicks',
         'cost',
@@ -280,6 +288,8 @@ class AmazonAdsClient {
         'campaignId',
         'adGroupId',
         'keywordId',
+        'keywordText',
+        'matchType',
         'impressions',
         'clicks',
         'cost',
@@ -307,6 +317,7 @@ class AmazonAdsClient {
 
         logger.info(`Report ${reportId} status: ${statusResponse.status} (attempt ${attempt + 1}/${maxAttempts})`);
 
+        // Handle all possible status values
         if (statusResponse.status === 'COMPLETED' || statusResponse.status === 'SUCCESS') {
           logger.info(`Report ${reportId} is ready, downloading...`);
           
@@ -321,7 +332,7 @@ class AmazonAdsClient {
         } else if (statusResponse.status === 'FAILED' || statusResponse.status === 'FAILURE') {
           const errorDetail = statusResponse.failureReason || statusResponse.statusDetails || 'Unknown error';
           throw new Error(`Report ${reportId} generation failed: ${errorDetail}`);
-        } else if (statusResponse.status === 'IN_PROGRESS' || statusResponse.status === 'PROCESSING' || statusResponse.status === 'PENDING') {
+        } else if (['IN_PROGRESS', 'PROCESSING', 'PENDING'].includes(statusResponse.status)) {
           // Use exponential backoff for longer waits
           const waitTime = Math.min(delayMs * Math.pow(1.2, Math.floor(attempt / 5)), 120000); // Max 2 minutes
           logger.info(`Report generation in progress, waiting ${waitTime / 1000} seconds...`);
@@ -348,13 +359,71 @@ class AmazonAdsClient {
   }
 
   /**
+   * Request keyword performance report
+   * Using specific columns as allowed by the API
+   */
+  async requestKeywordReport(reportDate) {
+    logger.info(`Requesting keyword performance report for ${reportDate}...`);
+    
+    const formattedDate = this.formatDateForAPI(reportDate);
+    
+    // Using only the allowed metric names from the API error message
+    const reportConfig = {
+      name: `keywords_${reportDate}`,
+      startDate: formattedDate,
+      endDate: formattedDate,
+      configuration: {
+        adProduct: 'SPONSORED_PRODUCTS',
+        groupBy: ['adGroup'],
+        columns: [
+          'keywordId',
+          'keywordText',
+          'impressions',
+          'clicks',
+          'cost',
+          'currency',
+          'attributedConversions1d',
+          'attributedConversions7d',
+          'attributedSales1d',
+          'attributedSales7d',
+          'matchType'
+        ],
+        reportTypeId: 'spKeywords',
+        timeUnit: 'DAILY',
+        format: 'GZIP_JSON'
+      }
+    };
+
+    logger.debug('Keyword report request config:', reportConfig);
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig);
+    return response.reportId;
+  }
+
+  /**
+   * Get keyword performance data
+   */
+  async getKeywordPerformanceData(reportDate) {
+    logger.info(`Fetching keyword performance data for ${reportDate}...`);
+
+    const reportId = await this.requestKeywordReport(reportDate);
+    const reportData = await this.waitAndDownloadReport(reportId);
+
+    return reportData;
+  }
+
+  /**
    * Get performance data for a date range using v3 API
    * v3 API supports date ranges natively
    */
   async getPerformanceData(reportType, startDate, endDate) {
     logger.info(`Fetching ${reportType} performance data for ${startDate} using v3 API...`);
 
-    // v3 API can handle both startDate and endDate (for now, using single date)
+    // For keywords, use the specific keyword report endpoint
+    if (reportType === 'keywords') {
+      return await this.getKeywordPerformanceData(startDate);
+    }
+
+    // For other report types, use the standard v3 format
     const reportId = await this.requestReport(reportType, startDate);
     const reportData = await this.waitAndDownloadReport(reportId);
 
@@ -363,4 +432,3 @@ class AmazonAdsClient {
 }
 
 module.exports = AmazonAdsClient;
-

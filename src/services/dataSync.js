@@ -315,10 +315,35 @@ class DataSyncService {
       
       const dbDate = this.formatDateForDB(reportDate);
       let synced = 0;
+      let skipped = 0;
       const total = reportData.length;
 
       for (const record of reportData) {
         if (!record.adGroupId) continue;
+
+        // Check if campaign exists before inserting performance data
+        const campaignCheck = await db.query(
+          'SELECT campaign_id FROM campaigns WHERE campaign_id = $1',
+          [record.campaignId]
+        );
+        
+        if (campaignCheck.rows.length === 0) {
+          logger.warn(`Skipping ad group performance for ${record.adGroupId} - campaign ${record.campaignId} not found`);
+          skipped++;
+          continue;
+        }
+
+        // Check if ad group exists before inserting performance data
+        const adGroupCheck = await db.query(
+          'SELECT ad_group_id FROM ad_groups WHERE ad_group_id = $1',
+          [record.adGroupId]
+        );
+        
+        if (adGroupCheck.rows.length === 0) {
+          logger.warn(`Skipping ad group performance for ${record.adGroupId} - ad group not found in ad_groups table`);
+          skipped++;
+          continue;
+        }
 
         await db.query(
           `INSERT INTO ad_group_performance (
@@ -359,7 +384,7 @@ class DataSyncService {
         }
       }
 
-      logger.info(`✅ [AD GROUPS] Successfully synced ${synced} ad group performance records for ${reportDate}`);
+      logger.info(`✅ [AD GROUPS] Successfully synced ${synced} ad group performance records for ${reportDate}, skipped ${skipped}`);
       return synced;
     } catch (error) {
       logger.error(`❌ [AD GROUPS] Error syncing ad group performance:`, error.message);
@@ -386,10 +411,47 @@ class DataSyncService {
       
       const dbDate = this.formatDateForDB(reportDate);
       let synced = 0;
+      let skipped = 0;
       const total = reportData.length;
 
       for (const record of reportData) {
         if (!record.keywordId) continue;
+
+        // Check if campaign exists before inserting performance data
+        const campaignCheck = await db.query(
+          'SELECT campaign_id FROM campaigns WHERE campaign_id = $1',
+          [record.campaignId]
+        );
+        
+        if (campaignCheck.rows.length === 0) {
+          logger.warn(`Skipping keyword performance for ${record.keywordId} - campaign ${record.campaignId} not found`);
+          skipped++;
+          continue;
+        }
+
+        // Check if ad group exists before inserting performance data
+        const adGroupCheck = await db.query(
+          'SELECT ad_group_id FROM ad_groups WHERE ad_group_id = $1',
+          [record.adGroupId]
+        );
+        
+        if (adGroupCheck.rows.length === 0) {
+          logger.warn(`Skipping keyword performance for ${record.keywordId} - ad group ${record.adGroupId} not found`);
+          skipped++;
+          continue;
+        }
+
+        // Check if keyword exists before inserting performance data
+        const keywordCheck = await db.query(
+          'SELECT keyword_id FROM keywords WHERE keyword_id = $1',
+          [record.keywordId]
+        );
+        
+        if (keywordCheck.rows.length === 0) {
+          logger.warn(`Skipping keyword performance for ${record.keywordId} - keyword not found in keywords table`);
+          skipped++;
+          continue;
+        }
 
         await db.query(
           `INSERT INTO keyword_performance (
@@ -432,7 +494,7 @@ class DataSyncService {
         }
       }
 
-      logger.info(`✅ [KEYWORDS] Successfully synced ${synced} keyword performance records for ${reportDate}`);
+      logger.info(`✅ [KEYWORDS] Successfully synced ${synced} keyword performance records for ${reportDate}, skipped ${skipped}`);
       return synced;
     } catch (error) {
       logger.error(`❌ [KEYWORDS] Error syncing keyword performance:`, error.message);
@@ -505,15 +567,15 @@ class DataSyncService {
         
         try {
           // Process campaigns first, then ad groups and keywords in parallel
-          const campaignPerf = 0 // await this.syncCampaignPerformance(reportDate);
+          // const campaignPerf = await this.syncCampaignPerformance(reportDate);
           
           // Process ad groups and keywords in parallel
-          const [adGroupPerf, keywordPerf] = await Promise.all([
-            this.syncAdGroupPerformance(reportDate),
-            this.syncKeywordPerformance(reportDate)
-          ]);
+          // const [adGroupPerf, keywordPerf] = await Promise.all([
+          //   this.syncAdGroupPerformance(reportDate),
+          const keywordPerf = await this.syncKeywordPerformance(reportDate);
+          // ]);
 
-          const dayTotal = campaignPerf + adGroupPerf + keywordPerf;
+          const dayTotal = keywordPerf // campaignPerf + adGroupPerf + keywordPerf;
           totalRecords.performance += dayTotal;
           
           logger.info(`✅ Day ${i + 1} complete: ${dayTotal} total records synced`);
@@ -566,4 +628,3 @@ class DataSyncService {
 }
 
 module.exports = DataSyncService;
-
