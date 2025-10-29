@@ -113,9 +113,49 @@ class AmazonAdsClient {
     }
   }
 
+  /**
+   * Helper method to handle pagination for API requests
+   */
+  async getAllPaginatedData(endpoint, params = {}) {
+    const allData = [];
+    let startIndex = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const paginatedParams = {
+        ...params,
+        startIndex,
+        count: pageSize
+      };
+
+      const response = await this.makeRequest('GET', endpoint, null, paginatedParams);
+      
+      if (response && response.length > 0) {
+        allData.push(...response);
+        
+        // If we got fewer results than the page size, we're done
+        if (response.length < pageSize) {
+          hasMore = false;
+        } else {
+          startIndex += pageSize;
+        }
+      } else {
+        hasMore = false;
+      }
+
+      // Log progress for large datasets
+      if (allData.length % 1000 === 0 && allData.length > 0) {
+        logger.info(`Retrieved ${allData.length} records...`);
+      }
+    }
+
+    logger.info(`Total records retrieved: ${allData.length}`);
+    return allData;
+  }
 
   /**
-   * Get all campaigns
+   * Get all campaigns with pagination
    */
   async getCampaigns(params = {}) {
     logger.info('Fetching campaigns...');
@@ -123,11 +163,11 @@ class AmazonAdsClient {
       stateFilter: 'enabled,paused,archived',
       ...params
     };
-    return await this.makeRequest('GET', '/v2/campaigns', null, defaultParams);
+    return await this.getAllPaginatedData('/v2/campaigns', defaultParams);
   }
 
   /**
-   * Get ad groups for a campaign
+   * Get all ad groups for a campaign with pagination
    */
   async getAdGroups(params = {}) {
     logger.info('Fetching ad groups...');
@@ -135,11 +175,11 @@ class AmazonAdsClient {
       stateFilter: 'enabled,paused,archived',
       ...params
     };
-    return await this.makeRequest('GET', '/v2/adGroups', null, defaultParams);
+    return await this.getAllPaginatedData('/v2/adGroups', defaultParams);
   }
 
   /**
-   * Get keywords
+   * Get all keywords with pagination
    */
   async getKeywords(params = {}) {
     logger.info('Fetching keywords...');
@@ -147,7 +187,7 @@ class AmazonAdsClient {
       stateFilter: 'enabled,paused,archived',
       ...params
     };
-    return await this.makeRequest('GET', '/v2/keywords', null, defaultParams);
+    return await this.getAllPaginatedData('/v2/keywords', defaultParams);
   }
 
   /**

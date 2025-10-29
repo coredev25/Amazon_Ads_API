@@ -542,9 +542,9 @@ class DataSyncService {
       // Sync metadata
       logger.info('\n📋 PHASE 1: Syncing Metadata');
       logger.info('───────────────────────────────────────────────────────');
-      // totalRecords.campaigns = await this.syncCampaigns();
-      // totalRecords.adGroups = await this.syncAdGroups();
-      // totalRecords.keywords = await this.syncKeywords();
+      totalRecords.campaigns = await this.syncCampaigns();
+      totalRecords.adGroups = await this.syncAdGroups();
+      totalRecords.keywords = await this.syncKeywords();
       logger.info(`✅ Metadata sync complete: ${totalRecords.campaigns} campaigns, ${totalRecords.adGroups} ad groups, ${totalRecords.keywords} keywords`);
 
       // Sync performance data for the last N days
@@ -567,15 +567,15 @@ class DataSyncService {
         
         try {
           // Process campaigns first, then ad groups and keywords in parallel
-          // const campaignPerf = await this.syncCampaignPerformance(reportDate);
+          const campaignPerf = await this.syncCampaignPerformance(reportDate);
           
           // Process ad groups and keywords in parallel
-          // const [adGroupPerf, keywordPerf] = await Promise.all([
-          //   this.syncAdGroupPerformance(reportDate),
-          const keywordPerf = await this.syncKeywordPerformance(reportDate);
-          // ]);
+          const [adGroupPerf, keywordPerf] = await Promise.all([
+            this.syncAdGroupPerformance(reportDate),
+            this.syncKeywordPerformance(reportDate)
+          ]);
 
-          const dayTotal = keywordPerf // campaignPerf + adGroupPerf + keywordPerf;
+          const dayTotal = campaignPerf + adGroupPerf + keywordPerf;
           totalRecords.performance += dayTotal;
           
           logger.info(`✅ Day ${i + 1} complete: ${dayTotal} total records synced`);
