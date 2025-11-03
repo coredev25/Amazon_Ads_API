@@ -364,3 +364,340 @@ class DatabaseConnector:
         # For now, just log to console
         self.logger.info(f"Adjustment logged: {entity_type} {entity_id} - {adjustment_type} "
                         f"from {old_value} to {new_value} - {reason}")
+    
+    # ============================================================================
+    # RE-ENTRY CONTROL & BID CHANGE TRACKING METHODS
+    # ============================================================================
+    
+    def get_last_bid_change(self, entity_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get the last bid change for an entity
+        
+        Args:
+            entity_type: Type of entity (keyword, ad_group, campaign)
+            entity_id: Entity ID
+            
+        Returns:
+            Last bid change record or None
+        """
+        query = """
+        SELECT 
+            id,
+            entity_type,
+            entity_id,
+            entity_name,
+            change_date,
+            old_bid,
+            new_bid,
+            change_amount,
+            change_percentage,
+            reason,
+            acos_at_change,
+            roas_at_change,
+            ctr_at_change,
+            metadata
+        FROM bid_change_history
+        WHERE entity_type = %s AND entity_id = %s
+        ORDER BY change_date DESC
+        LIMIT 1
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (entity_type, entity_id))
+                    result = cursor.fetchone()
+                    return dict(result) if result else None
+        except Exception as e:
+            self.logger.error(f"Error fetching last bid change: {e}")
+            return None
+    
+    def get_bid_change_history(self, entity_type: str, entity_id: int, 
+                               days_back: int = 14) -> List[Dict[str, Any]]:
+        """
+        Get bid change history for an entity
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: Entity ID
+            days_back: Days to look back
+            
+        Returns:
+            List of bid changes
+        """
+        query = """
+        SELECT 
+            id,
+            entity_type,
+            entity_id,
+            entity_name,
+            change_date,
+            old_bid,
+            new_bid,
+            change_amount,
+            change_percentage,
+            reason,
+            acos_at_change,
+            roas_at_change,
+            ctr_at_change,
+            metadata
+        FROM bid_change_history
+        WHERE entity_type = %s 
+            AND entity_id = %s
+            AND change_date >= %s
+        ORDER BY change_date DESC
+        """
+        
+        start_date = datetime.now() - timedelta(days=days_back)
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (entity_type, entity_id, start_date))
+                    return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Error fetching bid change history: {e}")
+            return []
+    
+    def save_bid_change(self, change_record: Dict[str, Any]) -> bool:
+        """
+        Save a bid change record to the database
+        
+        Args:
+            change_record: Bid change record dictionary
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        query = """
+        INSERT INTO bid_change_history (
+            entity_type, entity_id, entity_name, change_date,
+            old_bid, new_bid, change_amount, change_percentage,
+            reason, triggered_by, acos_at_change, roas_at_change,
+            ctr_at_change, conversions_at_change, metadata
+        ) VALUES (
+            %(entity_type)s, %(entity_id)s, %(entity_name)s, %(change_date)s,
+            %(old_bid)s, %(new_bid)s, %(change_amount)s, %(change_percentage)s,
+            %(reason)s, %(triggered_by)s, %(acos_at_change)s, %(roas_at_change)s,
+            %(ctr_at_change)s, %(conversions_at_change)s, %(metadata)s
+        )
+        RETURNING id
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, change_record)
+                    change_id = cursor.fetchone()[0]
+                    conn.commit()
+                    self.logger.info(f"Bid change saved: ID {change_id}")
+                    return True
+        except Exception as e:
+            self.logger.error(f"Error saving bid change: {e}")
+            return False
+    
+    def get_acos_history(self, entity_type: str, entity_id: int, 
+                        days_back: int = 14) -> List[Dict[str, Any]]:
+        """
+        Get ACOS history for an entity from performance data
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: Entity ID
+            days_back: Days to look back
+            
+        Returns:
+            List of ACOS values by date
+        """
+        # Determine which table to query based on entity type
+        if entity_type == 'keyword':
+            table = 'keyword_performance'
+            id_column = 'keyword_id'
+        elif entity_type == 'ad_group':
+            table = 'ad_group_performance'
+            id_column = 'ad_group_id'
+        elif entity_type == 'campaign':
+            table = 'campaign_performance'
+            id_column = 'campaign_id'
+        else:
+            self.logger.error(f"Invalid entity type: {entity_type}")
+            return []
+        
+        query = f"""
+        SELECT 
+            report_date as check_date,
+            CASE 
+                WHEN attributed_sales_7d > 0 THEN (cost / attributed_sales_7d)
+                ELSE 0 
+            END as acos_value,
+            cost,
+            attributed_sales_7d as sales
+        FROM {table}
+        WHERE {id_column} = %s
+            AND report_date >= %s
+            AND cost > 0
+        ORDER BY report_date DESC
+        """
+        
+        start_date = datetime.now() - timedelta(days=days_back)
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (entity_id, start_date))
+                    return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Error fetching ACOS history: {e}")
+            return []
+    
+    def save_acos_trend(self, entity_type: str, entity_id: int, 
+                       acos_value: float, trend_window_days: int,
+                       is_stable: bool, variance: Optional[float] = None) -> bool:
+        """
+        Save ACOS trend tracking data
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: Entity ID
+            acos_value: Current ACOS value
+            trend_window_days: Window size for trend calculation
+            is_stable: Whether the trend is stable
+            variance: Variance value
+            
+        Returns:
+            True if successful
+        """
+        query = """
+        INSERT INTO acos_trend_tracking (
+            entity_type, entity_id, check_date, acos_value,
+            trend_window_days, is_stable, variance
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (entity_id, entity_type, check_date, trend_window_days)
+        DO UPDATE SET 
+            acos_value = EXCLUDED.acos_value,
+            is_stable = EXCLUDED.is_stable,
+            variance = EXCLUDED.variance
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (
+                        entity_type, entity_id, datetime.now(), acos_value,
+                        trend_window_days, is_stable, variance
+                    ))
+                    conn.commit()
+                    return True
+        except Exception as e:
+            self.logger.error(f"Error saving ACOS trend: {e}")
+            return False
+    
+    def check_bid_lock(self, entity_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Check if entity has an active bid adjustment lock
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: Entity ID
+            
+        Returns:
+            Lock record if active, None otherwise
+        """
+        query = """
+        SELECT 
+            id,
+            entity_type,
+            entity_id,
+            locked_until,
+            lock_reason,
+            last_change_id
+        FROM bid_adjustment_locks
+        WHERE entity_type = %s 
+            AND entity_id = %s
+            AND locked_until > %s
+        ORDER BY locked_until DESC
+        LIMIT 1
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (entity_type, entity_id, datetime.now()))
+                    result = cursor.fetchone()
+                    return dict(result) if result else None
+        except Exception as e:
+            self.logger.error(f"Error checking bid lock: {e}")
+            return None
+    
+    def create_bid_lock(self, entity_type: str, entity_id: int, 
+                       lock_days: int, reason: str, 
+                       change_id: Optional[int] = None) -> bool:
+        """
+        Create a bid adjustment lock for an entity
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: Entity ID
+            lock_days: Number of days to lock
+            reason: Reason for lock
+            change_id: ID of associated bid change
+            
+        Returns:
+            True if successful
+        """
+        query = """
+        INSERT INTO bid_adjustment_locks (
+            entity_type, entity_id, locked_until, lock_reason, last_change_id
+        ) VALUES (
+            %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (entity_id, entity_type)
+        DO UPDATE SET 
+            locked_until = EXCLUDED.locked_until,
+            lock_reason = EXCLUDED.lock_reason,
+            last_change_id = EXCLUDED.last_change_id
+        """
+        
+        locked_until = datetime.now() + timedelta(days=lock_days)
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (entity_type, entity_id, locked_until, reason, change_id))
+                    conn.commit()
+                    self.logger.info(f"Bid lock created for {entity_type} {entity_id} until {locked_until}")
+                    return True
+        except Exception as e:
+            self.logger.error(f"Error creating bid lock: {e}")
+            return False
+    
+    def get_oscillating_entities(self) -> List[Dict[str, Any]]:
+        """
+        Get entities that are experiencing bid oscillation
+        
+        Returns:
+            List of oscillating entities
+        """
+        query = """
+        SELECT 
+            entity_type,
+            entity_id,
+            entity_name,
+            direction_changes,
+            last_change_date,
+            is_oscillating
+        FROM bid_oscillation_detection
+        WHERE is_oscillating = TRUE
+        ORDER BY direction_changes DESC
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query)
+                    return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Error fetching oscillating entities: {e}")
+            return []

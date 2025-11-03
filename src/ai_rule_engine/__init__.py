@@ -26,8 +26,9 @@ from .intelligence_engines import (
 from .negative_manager import NegativeKeywordManager, NegativeKeywordCandidate
 from .bid_optimizer import BidOptimizationEngine, BudgetOptimizationEngine
 from .learning_loop import LearningLoop, ModelTrainer
+from .re_entry_control import ReEntryController, BidChangeTracker, ReEntryControlResult, OscillationDetectionResult
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __all__ = [
     # Core Engine
     "AIRuleEngine",
@@ -60,5 +61,10 @@ __all__ = [
     "BudgetOptimizationEngine",
     # Learning Loop
     "LearningLoop",
-    "ModelTrainer"
+    "ModelTrainer",
+    # Re-entry Control & Oscillation Prevention
+    "ReEntryController",
+    "BidChangeTracker",
+    "ReEntryControlResult",
+    "OscillationDetectionResult"
 ]

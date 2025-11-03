@@ -54,6 +54,19 @@ class RuleConfig:
     max_daily_adjustments: int = 3  # Maximum adjustments per day per entity
     cooldown_hours: int = 6  # Hours between adjustments for same entity
     
+    # Re-entry Control & Oscillation Prevention (New)
+    bid_change_cooldown_days: int = 3  # Days to wait before re-adjusting same entity (reduced from 7)
+    min_bid_change_threshold: float = 0.05  # Minimum 5% change to trigger adjustment
+    acos_stability_window: int = 1  # Number of check cycles to confirm stable trend (act immediately, not after 3 cycles)
+    acos_hysteresis_lower: float = 0.25  # Lower bound for ACOS hysteresis (25% - tighter band)
+    acos_hysteresis_upper: float = 0.35  # Upper bound for ACOS hysteresis (35% - tighter band)
+    historical_smoothing_weight_recent: float = 0.7  # Weight for recent 7 days
+    historical_smoothing_weight_older: float = 0.3  # Weight for older 7 days
+    enable_re_entry_control: bool = True  # Enable re-entry control system
+    enable_oscillation_detection: bool = True  # Enable bid oscillation detection
+    oscillation_lookback_days: int = 14  # Days to look back for oscillation detection
+    oscillation_direction_change_threshold: int = 3  # Min direction changes to flag oscillation
+    
     # Intelligence Engine Configuration
     high_performer_roas: float = 5.0  # ROAS threshold for high performers
     long_tail_min_words: int = 3  # Minimum words for long-tail keywords
@@ -66,9 +79,28 @@ class RuleConfig:
     target_profit_margin: float = 0.30  # Target profit margin (30%)
     min_profit_threshold: float = 0.15  # Minimum acceptable profit margin (15%)
     
-    # Negative Keyword Manager Configuration
+    # Negative Keyword Manager Configuration (Legacy - deprecated)
     negative_zero_conversion_threshold: int = 500  # Impressions before flagging zero conversions
     negative_high_cost_threshold: float = 50.0  # Cost threshold for zero-conversion keywords
+    
+    # Smart Negative Keyword Manager Configuration (New)
+    negative_short_window_days: int = 7  # Short lookback window
+    negative_medium_window_days: int = 14  # Medium lookback window  
+    negative_long_window_days: int = 30  # Long lookback window
+    negative_consecutive_failures: int = 3  # Consecutive zero-conversion windows required
+    attribution_delay_days: int = 14  # Attribution delay consideration
+    negative_min_cost_threshold: float = 100.0  # Minimum cost before marking negative
+    negative_critical_cost_threshold: float = 200.0  # Critical cost threshold
+    negative_min_impressions: int = 2000  # Minimum impressions (conservative)
+    use_dynamic_thresholds: bool = True  # Use portfolio-based dynamic thresholds
+    negative_percentile_threshold: int = 25  # Bottom percentile for CTR comparison
+    use_temporary_holds: bool = True  # Use temporary holds instead of permanent negatives
+    temporary_hold_days: int = 30  # Days for temporary holds
+    negative_decision_cooldown_days: int = 14  # Cooldown between decisions
+    enable_negative_re_evaluation: bool = True  # Enable forgiveness logic
+    re_evaluation_interval_days: int = 60  # Days between re-evaluations
+    min_conversion_probability: float = 0.2  # Minimum conversion probability threshold
+    product_price_tier: str = 'mid'  # Product price tier: 'low', 'mid', 'premium'
     
     # Bid Optimization Weights
     weight_performance: float = 0.40  # Weight for performance metrics
@@ -132,6 +164,18 @@ class RuleConfig:
             'negative_keyword_impression_threshold': self.negative_keyword_impression_threshold,
             'max_daily_adjustments': self.max_daily_adjustments,
             'cooldown_hours': self.cooldown_hours,
+            # Re-entry Control
+            'bid_change_cooldown_days': self.bid_change_cooldown_days,
+            'min_bid_change_threshold': self.min_bid_change_threshold,
+            'acos_stability_window': self.acos_stability_window,
+            'acos_hysteresis_lower': self.acos_hysteresis_lower,
+            'acos_hysteresis_upper': self.acos_hysteresis_upper,
+            'historical_smoothing_weight_recent': self.historical_smoothing_weight_recent,
+            'historical_smoothing_weight_older': self.historical_smoothing_weight_older,
+            'enable_re_entry_control': self.enable_re_entry_control,
+            'enable_oscillation_detection': self.enable_oscillation_detection,
+            'oscillation_lookback_days': self.oscillation_lookback_days,
+            'oscillation_direction_change_threshold': self.oscillation_direction_change_threshold,
             # Intelligence Engines
             'high_performer_roas': self.high_performer_roas,
             'long_tail_min_words': self.long_tail_min_words,
@@ -141,6 +185,24 @@ class RuleConfig:
             'min_profit_threshold': self.min_profit_threshold,
             'negative_zero_conversion_threshold': self.negative_zero_conversion_threshold,
             'negative_high_cost_threshold': self.negative_high_cost_threshold,
+            # Smart Negative Keyword Manager
+            'negative_short_window_days': self.negative_short_window_days,
+            'negative_medium_window_days': self.negative_medium_window_days,
+            'negative_long_window_days': self.negative_long_window_days,
+            'negative_consecutive_failures': self.negative_consecutive_failures,
+            'attribution_delay_days': self.attribution_delay_days,
+            'negative_min_cost_threshold': self.negative_min_cost_threshold,
+            'negative_critical_cost_threshold': self.negative_critical_cost_threshold,
+            'negative_min_impressions': self.negative_min_impressions,
+            'use_dynamic_thresholds': self.use_dynamic_thresholds,
+            'negative_percentile_threshold': self.negative_percentile_threshold,
+            'use_temporary_holds': self.use_temporary_holds,
+            'temporary_hold_days': self.temporary_hold_days,
+            'negative_decision_cooldown_days': self.negative_decision_cooldown_days,
+            'enable_negative_re_evaluation': self.enable_negative_re_evaluation,
+            're_evaluation_interval_days': self.re_evaluation_interval_days,
+            'min_conversion_probability': self.min_conversion_probability,
+            'product_price_tier': self.product_price_tier,
             # Bid Optimization
             'weight_performance': self.weight_performance,
             'weight_intelligence': self.weight_intelligence,

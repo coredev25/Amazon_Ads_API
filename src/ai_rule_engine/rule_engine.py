@@ -60,9 +60,9 @@ class AIRuleEngine:
         
         # Initialize bid optimization engine (if enabled)
         if config.enable_advanced_bid_optimization:
-            self.bid_optimizer = BidOptimizationEngine(config.__dict__)
+            self.bid_optimizer = BidOptimizationEngine(config.__dict__, db_connector)
             self.budget_optimizer = BudgetOptimizationEngine(config.__dict__)
-            self.logger.info("Advanced bid optimization enabled")
+            self.logger.info("Advanced bid optimization enabled with re-entry control")
         else:
             self.bid_optimizer = None
             self.budget_optimizer = None
@@ -206,6 +206,27 @@ class AIRuleEngine:
                 )
                 
                 if bid_optimization:
+                    # Log bid change to database for re-entry control tracking
+                    if self.bid_optimizer:
+                        # Calculate current metrics for logging
+                        total_cost = sum(float(p.get('cost', 0)) for p in performance_data)
+                        total_sales = sum(float(p.get('attributed_sales_7d', 0)) for p in performance_data)
+                        total_impressions = sum(float(p.get('impressions', 0)) for p in performance_data)
+                        total_clicks = sum(float(p.get('clicks', 0)) for p in performance_data)
+                        total_conversions = sum(int(p.get('attributed_conversions_7d', 0)) for p in performance_data)
+                        
+                        current_metrics = {
+                            'acos': (total_cost / total_sales) if total_sales > 0 else 0,
+                            'roas': (total_sales / total_cost) if total_cost > 0 else 0,
+                            'ctr': (total_clicks / total_impressions * 100) if total_impressions > 0 else 0,
+                            'conversions': total_conversions
+                        }
+                        
+                        try:
+                            self.bid_optimizer.log_bid_change(bid_optimization, current_metrics)
+                        except Exception as e:
+                            self.logger.error(f"Error logging bid change: {e}")
+                    
                     # Convert to Recommendation format
                     recommendation = Recommendation(
                         entity_type=bid_optimization.entity_type,
@@ -224,7 +245,7 @@ class AIRuleEngine:
                         created_at=datetime.now()
                     )
                     
-                    # Record adjustment for cooldown tracking
+                    # Record adjustment for cooldown tracking (legacy)
                     self._record_adjustment(entity_type, entity_id)
                     
                     # Track recommendation in learning loop if enabled

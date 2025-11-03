@@ -7,6 +7,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass
+from .re_entry_control import ReEntryController, BidChangeTracker
 
 
 @dataclass
@@ -31,8 +32,9 @@ class BidOptimizationEngine:
     Advanced bid optimization combining multiple intelligence signals
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], db_connector=None):
         self.config = config
+        self.db = db_connector
         self.logger = logging.getLogger(__name__)
         
         # Bid limits
@@ -52,12 +54,22 @@ class BidOptimizationEngine:
             'seasonality': config.get('weight_seasonality', 0.15),
             'profit': config.get('weight_profit', 0.15)
         }
+        
+        # Initialize re-entry control
+        self.enable_re_entry_control = config.get('enable_re_entry_control', True)
+        if self.enable_re_entry_control:
+            self.re_entry_controller = ReEntryController(config)
+            self.bid_change_tracker = BidChangeTracker(self.logger)
+            self.logger.info("Re-entry control enabled for bid optimizer")
+        else:
+            self.re_entry_controller = None
+            self.bid_change_tracker = None
     
     def calculate_optimal_bid(self, entity_data: Dict[str, Any],
                               performance_data: List[Dict[str, Any]],
                               intelligence_signals: List[Any]) -> Optional[BidOptimization]:
         """
-        Calculate optimal bid based on multiple factors
+        Calculate optimal bid based on multiple factors with re-entry control
         
         Args:
             entity_data: Entity information
@@ -73,6 +85,11 @@ class BidOptimizationEngine:
         current_bid = float(entity_data.get('bid', entity_data.get('default_bid', 0)))
         if current_bid == 0:
             return None
+        
+        # Extract entity info
+        entity_id = entity_data.get('keyword_id', entity_data.get('ad_group_id', entity_data.get('campaign_id', 0)))
+        entity_type = entity_data.get('entity_type', 'keyword')
+        entity_name = entity_data.get('keyword_text', entity_data.get('ad_group_name', entity_data.get('campaign_name', 'Unknown')))
         
         # Calculate performance-based adjustment
         performance_adjustment = self._calculate_performance_adjustment(performance_data)
@@ -113,6 +130,37 @@ class BidOptimizationEngine:
         # Skip if adjustment is too small
         if abs(adjustment_percentage) < 2.0:
             return None
+        
+        # RE-ENTRY CONTROL CHECK
+        if self.enable_re_entry_control and self.db and self.re_entry_controller:
+            # Get bid change history
+            last_change = self.db.get_last_bid_change(entity_type, entity_id)
+            bid_history = self.db.get_bid_change_history(entity_type, entity_id, 
+                                                         self.config.get('oscillation_lookback_days', 14))
+            acos_history = self.db.get_acos_history(entity_type, entity_id, 14)
+            
+            # Check if bid adjustment is allowed
+            re_entry_result = self.re_entry_controller.should_adjust_bid(
+                entity_id=entity_id,
+                entity_type=entity_type,
+                current_bid=current_bid,
+                proposed_bid=new_bid,
+                last_change_date=last_change['change_date'] if last_change else None,
+                last_bid=last_change['new_bid'] if last_change else None,
+                acos_history=acos_history,
+                bid_change_history=bid_history
+            )
+            
+            if not re_entry_result.allowed:
+                self.logger.info(
+                    f"Bid adjustment blocked for {entity_type} {entity_id}: {re_entry_result.reason}"
+                )
+                # Return None to skip this adjustment
+                return None
+            else:
+                self.logger.debug(
+                    f"Bid adjustment approved for {entity_type} {entity_id}: {re_entry_result.reason}"
+                )
         
         # Build contributing factors
         contributing_factors = []
@@ -301,6 +349,56 @@ class BidOptimizationEngine:
             reasons.append("minor performance adjustments")
         
         return f"Recommend {direction} bid by {abs(total_percentage):.1f}% based on: {', '.join(reasons)}"
+    
+    def log_bid_change(self, bid_optimization: BidOptimization, 
+                      current_metrics: Dict[str, Any]) -> bool:
+        """
+        Log a bid change to the database for tracking and re-entry control
+        
+        Args:
+            bid_optimization: BidOptimization object with recommendation
+            current_metrics: Current performance metrics (ACOS, ROAS, CTR, conversions)
+            
+        Returns:
+            True if logged successfully
+        """
+        if not self.db or not self.bid_change_tracker:
+            return False
+        
+        # Create change record
+        change_record = self.bid_change_tracker.create_change_record(
+            entity_type=bid_optimization.entity_type,
+            entity_id=bid_optimization.entity_id,
+            entity_name=bid_optimization.entity_name,
+            old_bid=bid_optimization.current_bid,
+            new_bid=bid_optimization.recommended_bid,
+            reason=bid_optimization.reason,
+            acos=current_metrics.get('acos'),
+            roas=current_metrics.get('roas'),
+            ctr=current_metrics.get('ctr'),
+            conversions=current_metrics.get('conversions'),
+            metadata={
+                'confidence': bid_optimization.confidence,
+                'priority': bid_optimization.priority,
+                'contributing_factors': bid_optimization.contributing_factors,
+                **bid_optimization.metadata
+            }
+        )
+        
+        # Save to database
+        success = self.db.save_bid_change(change_record)
+        
+        # Create bid lock for cooldown period
+        if success:
+            cooldown_days = self.config.get('bid_change_cooldown_days', 3)
+            self.db.create_bid_lock(
+                entity_type=bid_optimization.entity_type,
+                entity_id=bid_optimization.entity_id,
+                lock_days=cooldown_days,
+                reason=f"Cooldown after bid adjustment ({bid_optimization.adjustment_percentage:+.1f}%)"
+            )
+        
+        return success
 
 
 class BudgetOptimizationEngine:
