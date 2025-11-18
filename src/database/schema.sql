@@ -181,6 +181,14 @@ CREATE TABLE IF NOT EXISTS bid_change_history (
     ctr_at_change DECIMAL(10, 4),
     conversions_at_change INT,
     metadata JSONB, -- Additional context
+    -- Learning Loop: Performance before change (14-day average)
+    performance_before JSONB, -- ACOS, ROAS, CTR, spend, sales, conversions
+    -- Learning Loop: Performance after change (14-day average, updated after 14 days)
+    performance_after JSONB, -- ACOS, ROAS, CTR, spend, sales, conversions
+    -- Learning Loop: Outcome evaluation
+    outcome_score DECIMAL(10, 4), -- Weighted improvement score
+    outcome_label VARCHAR(20), -- 'success', 'failure', 'neutral', NULL if not evaluated
+    evaluated_at TIMESTAMP, -- When outcome was evaluated (14+ days after change)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

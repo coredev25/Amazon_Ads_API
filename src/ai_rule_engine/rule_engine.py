@@ -58,23 +58,28 @@ class AIRuleEngine:
         # Initialize negative keyword manager
         self.negative_manager = NegativeKeywordManager(config.__dict__)
         
-        # Initialize bid optimization engine (if enabled)
-        if config.enable_advanced_bid_optimization:
-            self.bid_optimizer = BidOptimizationEngine(config.__dict__, db_connector)
-            self.budget_optimizer = BudgetOptimizationEngine(config.__dict__)
-            self.logger.info("Advanced bid optimization enabled with re-entry control")
-        else:
-            self.bid_optimizer = None
-            self.budget_optimizer = None
-        
-        # Initialize learning loop (if enabled)
+        # Initialize learning loop (if enabled) - must be before bid optimizer
         if config.enable_learning_loop:
             self.learning_loop = LearningLoop(config.__dict__)
-            self.model_trainer = ModelTrainer(config.__dict__)
+            self.model_trainer = ModelTrainer(config.__dict__, db_connector)
             self.logger.info("Learning loop enabled")
         else:
             self.learning_loop = None
             self.model_trainer = None
+        
+        # Initialize bid optimization engine with model_trainer and learning_loop (if enabled)
+        if config.enable_advanced_bid_optimization:
+            self.bid_optimizer = BidOptimizationEngine(
+                config.__dict__, 
+                db_connector,
+                model_trainer=self.model_trainer,  # For STEP 5: Predictive gating
+                learning_loop=self.learning_loop   # For STEP 7: Campaign adaptivity
+            )
+            self.budget_optimizer = BudgetOptimizationEngine(config.__dict__)
+            self.logger.info("Advanced bid optimization enabled with re-entry control and learning loop")
+        else:
+            self.bid_optimizer = None
+            self.budget_optimizer = None
         
         # Track recent adjustments for cooldown enforcement
         self.recent_adjustments = {}
@@ -223,7 +228,12 @@ class AIRuleEngine:
                         }
                         
                         try:
-                            self.bid_optimizer.log_bid_change(bid_optimization, current_metrics)
+                            # STEP 1: Log bid change with performance_before for learning loop
+                            self.bid_optimizer.log_bid_change(
+                                bid_optimization, 
+                                current_metrics,
+                                performance_data=performance_data  # Pass performance data for 14-day averages
+                            )
                         except Exception as e:
                             self.logger.error(f"Error logging bid change: {e}")
                     

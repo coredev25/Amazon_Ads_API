@@ -32,9 +32,11 @@ class BidOptimizationEngine:
     Advanced bid optimization combining multiple intelligence signals
     """
     
-    def __init__(self, config: Dict[str, Any], db_connector=None):
+    def __init__(self, config: Dict[str, Any], db_connector=None, model_trainer=None, learning_loop=None):
         self.config = config
         self.db = db_connector
+        self.model_trainer = model_trainer  # For STEP 5: Predictive gating
+        self.learning_loop = learning_loop  # For STEP 7: Campaign adaptivity
         self.logger = logging.getLogger(__name__)
         
         # Bid limits
@@ -158,6 +160,12 @@ class BidOptimizationEngine:
         else:
             self.re_entry_controller = None
             self.bid_change_tracker = None
+        
+        # STEP 7: Campaign adaptivity configuration
+        self.enable_campaign_adaptivity = config.get('enable_campaign_adaptivity', True)
+        self.campaign_success_threshold_high = config.get('campaign_success_threshold_high', 0.70)  # >70% = increase aggressiveness
+        self.campaign_success_threshold_low = config.get('campaign_success_threshold_low', 0.40)  # <40% = reduce aggressiveness
+        self.adaptivity_adjustment_factor = config.get('adaptivity_adjustment_factor', 0.10)  # ±10% adjustment
     
     def calculate_optimal_bid(self, entity_data: Dict[str, Any],
                               performance_data: List[Dict[str, Any]],
@@ -326,6 +334,31 @@ class BidOptimizationEngine:
             profit_adjustment * self.weights['profit']
         )
         
+        # STEP 7: Apply campaign-level adaptivity (adjust aggressiveness based on campaign success rate)
+        if self.enable_campaign_adaptivity and self.learning_loop:
+            try:
+                # Get campaign ID from entity data
+                campaign_id = entity_data.get('campaign_id')
+                if campaign_id:
+                    campaign_success_rate = self.learning_loop.get_campaign_success_rate(campaign_id, days=30)
+                    
+                    if campaign_success_rate > self.campaign_success_threshold_high:
+                        # High success rate - increase aggressiveness (+10%)
+                        total_adjustment = total_adjustment * (1 + self.adaptivity_adjustment_factor)
+                        self.logger.info(
+                            f"Campaign {campaign_id} high success rate ({campaign_success_rate:.1%}) - "
+                            f"increasing aggressiveness by {self.adaptivity_adjustment_factor:.0%}"
+                        )
+                    elif campaign_success_rate < self.campaign_success_threshold_low:
+                        # Low success rate - reduce aggressiveness (-10%)
+                        total_adjustment = total_adjustment * (1 - self.adaptivity_adjustment_factor)
+                        self.logger.info(
+                            f"Campaign {campaign_id} low success rate ({campaign_success_rate:.1%}) - "
+                            f"reducing aggressiveness by {self.adaptivity_adjustment_factor:.0%}"
+                        )
+            except Exception as e:
+                self.logger.warning(f"Error in campaign adaptivity: {e}")
+        
         # Apply adjustment to current bid
         adjustment_amount = current_bid * total_adjustment
         new_bid = current_bid + adjustment_amount
@@ -426,6 +459,96 @@ class BidOptimizationEngine:
         if abs(profit_adjustment) > 0.02:
             contributing_factors.append(f"Profit optimization: {profit_adjustment:+.1%}")
         
+        # Calculate current metrics for prediction (reuse from performance calculation)
+        total_conversions = sum(int(record.get('attributed_conversions_7d', 0)) for record in filtered_performance_data)
+        total_spend = sum(float(record.get('cost', 0)) for record in filtered_performance_data)
+        total_sales = sum(self._get_daily_sales(record) for record in filtered_performance_data)
+        
+        # Get current metrics (reuse smoothed or calculated values)
+        if self.enable_performance_smoothing and len(filtered_performance_data) >= self.min_data_points_for_smoothing:
+            smoothed_metrics = self._apply_smoothing(filtered_performance_data)
+            current_acos = smoothed_metrics.get('acos', 0)
+            current_roas = smoothed_metrics.get('roas', 0)
+            current_ctr = smoothed_metrics.get('ctr', 0)
+        else:
+            current_acos = (total_spend / total_sales) if total_sales > 0 else 0
+            current_roas = (total_sales / total_spend) if total_spend > 0 else 0
+            total_impressions = sum(float(record.get('impressions', 0)) for record in filtered_performance_data)
+            total_clicks = sum(float(record.get('clicks', 0)) for record in filtered_performance_data)
+            current_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+        
+        # STEP 5: Predict success probability before making adjustment
+        prob_success = 0.5  # Default
+        if self.model_trainer:
+            try:
+                # Prepare current metrics for prediction
+                current_metrics_for_pred = {
+                    'acos': current_acos,
+                    'roas': current_roas,
+                    'ctr': current_ctr,
+                    'conversions': total_conversions,
+                    'spend': total_spend,
+                    'sales': total_sales,
+                }
+                
+                # Summarize intelligence signals
+                intelligence_summary = {}
+                if intelligence_signals:
+                    for signal in intelligence_signals:
+                        if signal.engine_name == 'Seasonality':
+                            intelligence_summary['seasonality_boost'] = signal.strength
+                        elif signal.engine_name == 'Ranking':
+                            intelligence_summary['rank_signal'] = signal.strength
+                        elif signal.engine_name == 'Profit':
+                            intelligence_summary['profit_margin'] = signal.strength
+                
+                prob_success = self.model_trainer.predict_success_probability(
+                    current_metrics=current_metrics_for_pred,
+                    proposed_adjustment=total_adjustment,
+                    current_bid=current_bid,
+                    entity_type=entity_type,
+                    intelligence_signals=intelligence_summary if intelligence_summary else None
+                )
+                
+                # Apply predictive gating: skip if probability < 0.5, reduce if 0.5-0.7, boost if >0.7
+                if prob_success < 0.5:
+                    self.logger.info(
+                        f"Skipping bid adjustment for {entity_type} {entity_id}: "
+                        f"low success probability ({prob_success:.2%})"
+                    )
+                    return None
+                elif 0.5 <= prob_success < 0.7:
+                    # Apply smaller adjustment (reduce by 30%)
+                    total_adjustment = total_adjustment * 0.7
+                    self.logger.info(
+                        f"Reducing adjustment for {entity_type} {entity_id}: "
+                        f"moderate success probability ({prob_success:.2%})"
+                    )
+                # else: prob_success >= 0.7, apply full or boosted adjustment
+                
+            except Exception as e:
+                self.logger.warning(f"Error in success probability prediction: {e}")
+        
+        # Recalculate bid with potentially adjusted total_adjustment
+        adjustment_amount = current_bid * total_adjustment
+        new_bid = current_bid + adjustment_amount
+        
+        # Apply bid limits
+        new_bid = max(self.bid_floor, min(self.bid_cap, new_bid))
+        
+        # Apply max adjustment limit
+        max_change = current_bid * self.max_adjustment
+        if abs(new_bid - current_bid) > max_change:
+            new_bid = current_bid + (max_change if new_bid > current_bid else -max_change)
+        
+        # Recalculate actual adjustment
+        actual_adjustment = new_bid - current_bid
+        adjustment_percentage = (actual_adjustment / current_bid * 100) if current_bid > 0 else 0
+        
+        # Skip if adjustment is too small
+        if abs(adjustment_percentage) < 2.0:
+            return None
+        
         # Calculate confidence
         confidence = self._calculate_confidence(performance_data, intelligence_signals)
         
@@ -456,7 +579,8 @@ class BidOptimizationEngine:
                 'seasonality_adjustment': seasonality_adjustment,
                 'profit_adjustment': profit_adjustment,
                 'total_adjustment': total_adjustment,
-                'signals_count': len(intelligence_signals)
+                'signals_count': len(intelligence_signals),
+                'predicted_success_probability': prob_success
             }
         )
     
@@ -1253,19 +1377,45 @@ class BidOptimizationEngine:
         return f"Recommend {direction} bid by {abs(total_percentage):.1f}% based on: {', '.join(reasons)}"
     
     def log_bid_change(self, bid_optimization: BidOptimization, 
-                      current_metrics: Dict[str, Any]) -> bool:
+                      current_metrics: Dict[str, Any],
+                      performance_data: Optional[List[Dict[str, Any]]] = None) -> bool:
         """
-        Log a bid change to the database for tracking and re-entry control
+        STEP 1: Log a bid change to the database with performance_before metrics
         
         Args:
             bid_optimization: BidOptimization object with recommendation
             current_metrics: Current performance metrics (ACOS, ROAS, CTR, conversions)
+            performance_data: Optional performance data to calculate 14-day averages
             
         Returns:
             True if logged successfully
         """
         if not self.db or not self.bid_change_tracker:
             return False
+        
+        # Calculate 14-day performance averages for learning loop
+        performance_before = None
+        if performance_data:
+            filtered_data = self._filter_performance_data_by_timeframe(
+                performance_data, self.bid_optimization_lookback_days
+            )
+            if filtered_data:
+                total_cost = sum(float(r.get('cost', 0)) for r in filtered_data)
+                total_sales = sum(self._get_daily_sales(r) for r in filtered_data)
+                total_impressions = sum(float(r.get('impressions', 0)) for r in filtered_data)
+                total_clicks = sum(float(r.get('clicks', 0)) for r in filtered_data)
+                total_conversions = sum(int(r.get('attributed_conversions_7d', 0)) for r in filtered_data)
+                
+                performance_before = {
+                    'acos': (total_cost / total_sales) if total_sales > 0 else 0,
+                    'roas': (total_sales / total_cost) if total_cost > 0 else 0,
+                    'ctr': (total_clicks / total_impressions * 100) if total_impressions > 0 else 0,
+                    'spend': total_cost,
+                    'sales': total_sales,
+                    'conversions': total_conversions,
+                    'impressions': total_impressions,
+                    'clicks': total_clicks
+                }
         
         # Create change record
         change_record = self.bid_change_tracker.create_change_record(
@@ -1286,6 +1436,14 @@ class BidOptimizationEngine:
                 **bid_optimization.metadata
             }
         )
+        
+        # Add learning loop fields
+        import json
+        change_record['performance_before'] = json.dumps(performance_before) if performance_before else None
+        change_record['performance_after'] = None  # Will be updated after 14 days
+        change_record['outcome_score'] = None
+        change_record['outcome_label'] = None
+        change_record['evaluated_at'] = None
         
         # Save to database
         success = self.db.save_bid_change(change_record)

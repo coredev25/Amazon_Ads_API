@@ -10,6 +10,19 @@ from dataclasses import dataclass
 import json
 import statistics
 from collections import defaultdict
+import os
+import pickle
+
+try:
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, roc_auc_score
+    import numpy as np
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    np = None
 
 
 @dataclass
@@ -124,41 +137,61 @@ class LearningLoop:
         
         return outcome_record
     
+    def evaluate_outcome(self, before_metrics: Dict[str, float],
+                        after_metrics: Dict[str, float]) -> Dict[str, Any]:
+        """
+        STEP 2: Calculate outcome success/failure with weighted scoring
+        
+        Args:
+            before_metrics: Performance metrics before change (14-day average)
+            after_metrics: Performance metrics after change (14-day average)
+            
+        Returns:
+            Dictionary with outcome_score, outcome_label, and details
+        """
+        # Calculate improvements (as per plan)
+        acos_improvement = 0.0
+        if before_metrics.get('acos', 0) > 0:
+            acos_improvement = (before_metrics['acos'] - after_metrics.get('acos', before_metrics['acos'])) / before_metrics['acos']
+        
+        roas_improvement = 0.0
+        if before_metrics.get('roas', 0) > 0:
+            roas_improvement = (after_metrics.get('roas', before_metrics['roas']) - before_metrics['roas']) / before_metrics['roas']
+        
+        ctr_improvement = 0.0
+        if before_metrics.get('ctr', 0) > 0:
+            ctr_improvement = (after_metrics.get('ctr', before_metrics['ctr']) - before_metrics['ctr']) / before_metrics['ctr']
+        
+        # Weighted score: 40% ACOS, 40% ROAS, 20% CTR
+        weighted_score = 0.4 * acos_improvement + 0.4 * roas_improvement + 0.2 * ctr_improvement
+        
+        # Determine outcome label
+        if weighted_score > 0.1:  # +10% improvement
+            outcome_label = 'success'
+        elif weighted_score < -0.05:  # -5% decline
+            outcome_label = 'failure'
+        else:
+            outcome_label = 'neutral'
+        
+        return {
+            'outcome_score': weighted_score,
+            'outcome_label': outcome_label,
+            'acos_improvement': acos_improvement,
+            'roas_improvement': roas_improvement,
+            'ctr_improvement': ctr_improvement,
+            'weighted_score': weighted_score
+        }
+    
     def _calculate_improvement(self, before_metrics: Dict[str, float],
                                after_metrics: Dict[str, float]) -> float:
         """
         Calculate overall improvement based on multiple metrics
         
         Prioritizes ROAS and ACOS improvements
+        Uses the same weighted scoring as evaluate_outcome
         """
-        improvements = []
-        
-        # ROAS improvement (higher is better)
-        if 'roas' in before_metrics and 'roas' in after_metrics:
-            if before_metrics['roas'] > 0:
-                roas_improvement = (after_metrics['roas'] - before_metrics['roas']) / before_metrics['roas']
-                improvements.append(('roas', roas_improvement, 0.40))  # 40% weight
-        
-        # ACOS improvement (lower is better)
-        if 'acos' in before_metrics and 'acos' in after_metrics:
-            if before_metrics['acos'] > 0:
-                acos_improvement = -(after_metrics['acos'] - before_metrics['acos']) / before_metrics['acos']
-                improvements.append(('acos', acos_improvement, 0.40))  # 40% weight
-        
-        # CTR improvement (higher is better)
-        if 'ctr' in before_metrics and 'ctr' in after_metrics:
-            if before_metrics['ctr'] > 0:
-                ctr_improvement = (after_metrics['ctr'] - before_metrics['ctr']) / before_metrics['ctr']
-                improvements.append(('ctr', ctr_improvement, 0.20))  # 20% weight
-        
-        # Calculate weighted average
-        if not improvements:
-            return 0.0
-        
-        total_weight = sum(weight for _, _, weight in improvements)
-        weighted_improvement = sum(imp * weight for _, imp, weight in improvements) / total_weight
-        
-        return weighted_improvement
+        result = self.evaluate_outcome(before_metrics, after_metrics)
+        return result['weighted_score']
     
     def analyze_performance_trends(self, entity_type: Optional[str] = None,
                                    days: int = 30) -> Dict[str, Any]:
@@ -310,21 +343,68 @@ class LearningLoop:
             json.dump(data, f, indent=2)
         
         self.logger.info(f"Exported learning data to {output_path}")
+    
+    def get_campaign_success_rate(self, campaign_id: int, days: int = 30) -> float:
+        """
+        STEP 7: Get success rate for a campaign (for adaptivity)
+        
+        Args:
+            campaign_id: Campaign ID
+            days: Days to look back
+            
+        Returns:
+            Success rate (0.0 to 1.0)
+        """
+        cutoff_date = datetime.now() - timedelta(days=days)
+        campaign_outcomes = [
+            o for o in self.outcomes_history
+            if o.entity_id == campaign_id and o.timestamp >= cutoff_date
+        ]
+        
+        if not campaign_outcomes:
+            return 0.5  # Default if no data
+        
+        successes = sum(1 for o in campaign_outcomes if o.outcome == 'success')
+        return successes / len(campaign_outcomes)
 
 
 class ModelTrainer:
     """
-    Trains predictive models based on historical data
+    STEP 4: Trains predictive models based on historical data
+    Uses Logistic Regression or Gradient Boosting to predict success probability
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], db_connector=None):
         self.config = config
         self.logger = logging.getLogger(__name__)
+        self.db = db_connector
         self.min_training_samples = config.get('min_training_samples', 100)
+        self.model = None
+        self.model_version = 0
+        self.model_path = config.get('model_path', 'models/bid_success_model.pkl')
+        self.model_type = config.get('model_type', 'logistic_regression')  # 'logistic_regression' or 'gradient_boosting'
+        
+        # Create models directory if it doesn't exist
+        if self.model_path:
+            os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
+        
+        # Load existing model if available
+        self._load_model()
     
-    def prepare_training_data(self, outcomes: List[PerformanceOutcome]) -> Tuple[List[List[float]], List[int]]:
+    def prepare_training_data(self, outcomes: List[PerformanceOutcome], 
+                            include_intelligence_signals: bool = False,
+                            intelligence_summary: Optional[Dict[str, Any]] = None) -> Tuple[List[List[float]], List[int]]:
         """
-        Prepare training data from outcomes
+        STEP 3: Build training dataset with comprehensive features
+        
+        Features:
+        - Previous ACOS, CTR, ROAS
+        - Number of conversions
+        - Spend in last 14 days
+        - Adjustment type (+% or -%)
+        - Entity type
+        - Match type (for keywords)
+        - Intelligence signals summary (seasonality, rank, etc.)
         
         Returns:
             Tuple of (features, labels)
@@ -333,15 +413,32 @@ class ModelTrainer:
         labels = []
         
         for outcome in outcomes:
-            # Extract features
+            before = outcome.before_metrics
+            adjustment_pct = ((outcome.applied_value - outcome.recommended_value) / outcome.recommended_value * 100) if outcome.recommended_value != 0 else 0
+            
+            # Extract comprehensive features
             feature_vector = [
-                outcome.before_metrics.get('roas', 0),
-                outcome.before_metrics.get('acos', 0),
-                outcome.before_metrics.get('ctr', 0),
-                outcome.applied_value,
+                before.get('acos', 0),
+                before.get('roas', 0),
+                before.get('ctr', 0),
+                before.get('conversions', 0),
+                before.get('spend', 0),
+                before.get('sales', 0),
+                adjustment_pct,  # Adjustment percentage
+                1.0 if adjustment_pct > 0 else 0.0,  # Is increase
+                1.0 if adjustment_pct < 0 else 0.0,  # Is decrease
                 1 if outcome.entity_type == 'keyword' else 0,
+                1 if outcome.entity_type == 'ad_group' else 0,
                 1 if outcome.entity_type == 'campaign' else 0,
             ]
+            
+            # Add intelligence signals if available
+            if include_intelligence_signals and intelligence_summary:
+                feature_vector.extend([
+                    intelligence_summary.get('seasonality_boost', 0),
+                    intelligence_summary.get('rank_signal', 0),
+                    intelligence_summary.get('profit_margin', 0),
+                ])
             
             # Label (1 for success, 0 for failure/neutral)
             label = 1 if outcome.outcome == 'success' else 0
@@ -392,47 +489,173 @@ class ModelTrainer:
         
         return importance
     
+    def train_model(self, outcomes: List[PerformanceOutcome],
+                   intelligence_summaries: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """
+        STEP 4: Train the learning model
+        
+        Args:
+            outcomes: List of performance outcomes
+            intelligence_summaries: Optional list of intelligence signal summaries
+            
+        Returns:
+            Training results with metrics
+        """
+        if not SKLEARN_AVAILABLE:
+            self.logger.warning("scikit-learn not available, using fallback prediction")
+            return {'status': 'skipped', 'reason': 'scikit-learn not available'}
+        
+        if len(outcomes) < self.min_training_samples:
+            self.logger.info(f"Insufficient training samples: {len(outcomes)} < {self.min_training_samples}")
+            return {'status': 'skipped', 'reason': 'insufficient_samples', 'count': len(outcomes)}
+        
+        # Prepare training data
+        features, labels = self.prepare_training_data(outcomes, include_intelligence_signals=False)
+        
+        if not features or not labels:
+            return {'status': 'error', 'reason': 'no_features'}
+        
+        # Convert to numpy arrays
+        X = np.array(features)
+        y = np.array(labels)
+        
+        # Split into train/test
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        # Train model
+        if self.model_type == 'gradient_boosting':
+            self.model = GradientBoostingClassifier(n_estimators=100, random_state=42, max_depth=5)
+        else:
+            self.model = LogisticRegression(random_state=42, max_iter=1000)
+        
+        self.model.fit(X_train, y_train)
+        
+        # Evaluate
+        train_pred = self.model.predict(X_train)
+        test_pred = self.model.predict(X_test)
+        train_proba = self.model.predict_proba(X_train)[:, 1]
+        test_proba = self.model.predict_proba(X_test)[:, 1]
+        
+        train_acc = accuracy_score(y_train, train_pred)
+        test_acc = accuracy_score(y_test, test_pred)
+        train_auc = roc_auc_score(y_train, train_proba) if len(set(y_train)) > 1 else 0.5
+        test_auc = roc_auc_score(y_test, test_proba) if len(set(y_test)) > 1 else 0.5
+        
+        self.model_version += 1
+        
+        # Save model
+        self._save_model()
+        
+        results = {
+            'status': 'success',
+            'model_type': self.model_type,
+            'model_version': self.model_version,
+            'training_samples': len(X_train),
+            'test_samples': len(X_test),
+            'train_accuracy': train_acc,
+            'test_accuracy': test_acc,
+            'train_auc': train_auc,
+            'test_auc': test_auc
+        }
+        
+        self.logger.info(f"Model trained: {results}")
+        return results
+    
     def predict_success_probability(self, current_metrics: Dict[str, float],
                                    proposed_adjustment: float,
+                                   current_bid: float,
                                    entity_type: str,
-                                   outcomes: List[PerformanceOutcome]) -> float:
+                                   intelligence_signals: Optional[Dict[str, Any]] = None) -> float:
         """
-        Predict probability of success for a proposed adjustment
+        STEP 5: Predict probability of success for a proposed adjustment
         
-        Simple implementation - in production, use trained ML model
+        Args:
+            current_metrics: Current performance metrics
+            proposed_adjustment: Proposed adjustment percentage
+            current_bid: Current bid amount
+            entity_type: Type of entity
+            intelligence_signals: Optional intelligence signal summary
+            
+        Returns:
+            Probability of success (0.0 to 1.0)
         """
-        if len(outcomes) < 20:
-            return 0.5  # Default probability
-        
-        # Find similar historical cases
-        similar_outcomes = []
-        
-        for outcome in outcomes:
-            # Calculate similarity
-            similarity = 0.0
-            
-            # ROAS similarity
-            if 'roas' in current_metrics and 'roas' in outcome.before_metrics:
-                roas_diff = abs(current_metrics['roas'] - outcome.before_metrics['roas'])
-                similarity += max(0, 1 - roas_diff / 5.0) * 0.4
-            
-            # Entity type match
-            if outcome.entity_type == entity_type:
-                similarity += 0.3
-            
-            # Adjustment magnitude similarity
-            adj_diff = abs(proposed_adjustment - outcome.applied_value)
-            similarity += max(0, 1 - adj_diff / 2.0) * 0.3
-            
-            if similarity > 0.5:  # Threshold for similarity
-                similar_outcomes.append(outcome)
-        
-        if not similar_outcomes:
+        if self.model is None:
+            # Fallback: return default probability
             return 0.5
         
-        # Calculate success rate among similar cases
-        successes = sum(1 for o in similar_outcomes if o.outcome == 'success')
-        success_probability = successes / len(similar_outcomes)
+        if not SKLEARN_AVAILABLE:
+            return 0.5
         
-        return success_probability
+        # Prepare feature vector (same as training)
+        adjustment_pct = proposed_adjustment * 100  # Convert to percentage
+        
+        feature_vector = [
+            current_metrics.get('acos', 0),
+            current_metrics.get('roas', 0),
+            current_metrics.get('ctr', 0),
+            current_metrics.get('conversions', 0),
+            current_metrics.get('spend', 0),
+            current_metrics.get('sales', 0),
+            adjustment_pct,
+            1.0 if adjustment_pct > 0 else 0.0,
+            1.0 if adjustment_pct < 0 else 0.0,
+            1 if entity_type == 'keyword' else 0,
+            1 if entity_type == 'ad_group' else 0,
+            1 if entity_type == 'campaign' else 0,
+        ]
+        
+        # Add intelligence signals if available
+        if intelligence_signals:
+            feature_vector.extend([
+                intelligence_signals.get('seasonality_boost', 0),
+                intelligence_signals.get('rank_signal', 0),
+                intelligence_signals.get('profit_margin', 0),
+            ])
+        else:
+            feature_vector.extend([0, 0, 0])  # Pad with zeros
+        
+        # Predict
+        try:
+            X = np.array([feature_vector])
+            proba = self.model.predict_proba(X)[0, 1]  # Probability of success (class 1)
+            return float(proba)
+        except Exception as e:
+            self.logger.warning(f"Error in prediction: {e}")
+            return 0.5
+    
+    def _save_model(self) -> bool:
+        """Save trained model to disk"""
+        if self.model is None or not self.model_path:
+            return False
+        
+        try:
+            model_data = {
+                'model': self.model,
+                'model_version': self.model_version,
+                'model_type': self.model_type,
+                'trained_at': datetime.now().isoformat()
+            }
+            with open(self.model_path, 'wb') as f:
+                pickle.dump(model_data, f)
+            self.logger.info(f"Model saved to {self.model_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving model: {e}")
+            return False
+    
+    def _load_model(self) -> bool:
+        """Load trained model from disk"""
+        if not self.model_path or not os.path.exists(self.model_path):
+            return False
+        
+        try:
+            with open(self.model_path, 'rb') as f:
+                model_data = pickle.load(f)
+            self.model = model_data['model']
+            self.model_version = model_data.get('model_version', 0)
+            self.logger.info(f"Model loaded from {self.model_path} (version {self.model_version})")
+            return True
+        except Exception as e:
+            self.logger.warning(f"Error loading model: {e}")
+            return False
 
