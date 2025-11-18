@@ -122,7 +122,7 @@ class LongTailEngine:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.min_word_count = config.get('long_tail_min_words', 3)
-        self.target_roas = config.get('roas_target', 4.0)
+        self.target_roas = config.get('roas_target', 11.11)
     
     def identify_long_tail_opportunities(self, keyword_data: Dict[str, Any],
                                         performance_data: List[Dict[str, Any]]) -> Optional[IntelligenceSignal]:

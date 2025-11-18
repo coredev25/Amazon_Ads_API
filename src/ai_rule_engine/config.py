@@ -13,23 +13,37 @@ class RuleConfig:
     """Configuration for AI Rule Engine rules and limits"""
     
     # ACOS Rule Configuration
-    acos_target: float = 0.30  # Target ACOS (30%)
+    acos_target: float = 0.09  # Target ACOS (9%)
     acos_tolerance: float = 0.05  # ±5% tolerance
     acos_bid_adjustment_factor: float = 0.1  # 10% bid adjustment per rule violation
+    # ACOS Threshold Definitions (Granular Range-Specific Actions)
+    acos_high_threshold: float = 0.40  # High ACOS threshold (40%+) - reduce bids aggressively
+    acos_medium_high_threshold: float = 0.35  # Medium-high ACOS (35-40%) - reduce bids moderately
+    acos_low_threshold: float = 0.25  # Low ACOS threshold (<25%) - can increase bids
+    # Granular ACOS Tiers (discrete tier logic)
+    acos_tier_very_high: float = 0.50  # 50%+ - aggressive reduction
+    acos_tier_high: float = 0.40  # 40-50% - strong reduction
+    acos_tier_medium_high: float = 0.35  # 35-40% - moderate reduction
+    acos_tier_medium: float = 0.30  # 30-35% - slight reduction
+    acos_tier_target: float = 0.09  # Target ACOS (9%)
+    acos_tier_good: float = 0.25  # 25-30% - maintain
+    acos_tier_low: float = 0.20  # 20-25% - slight increase
+    acos_tier_very_low: float = 0.15  # 15-20% - moderate increase
+    acos_tier_excellent: float = 0.10  # <15% - strong increase
     
     # ROAS Rule Configuration  
-    roas_target: float = 4.0  # Target ROAS (4:1)
+    roas_target: float = 11.11  # Target ROAS (11.11:1)
     roas_tolerance: float = 0.5  # ±0.5 tolerance
     roas_bid_adjustment_factor: float = 0.15  # 15% bid adjustment per rule violation
     
     # CTR Rule Configuration
     ctr_minimum: float = 0.5  # Minimum CTR (0.5%)
-    ctr_target: float = 2.0  # Target CTR (2.0%)
+    ctr_target: float = 0.50  # Target CTR (0.50%)
     ctr_bid_adjustment_factor: float = 0.2  # 20% bid adjustment per rule violation
     
     # Bid Limits
-    bid_floor: float = 0.01  # Minimum bid ($0.01)
-    bid_cap: float = 10.0  # Maximum bid ($10.00)
+    bid_floor: float = 0.02  # Minimum bid ($0.02)
+    bid_cap: float = 4.52  # Maximum bid ($4.52)
     bid_max_adjustment: float = 0.5  # Maximum 50% adjustment per cycle
     
     # Budget Configuration
@@ -45,6 +59,12 @@ class RuleConfig:
     # Lookback Periods
     performance_lookback_days: int = 7  # Days to look back for performance data
     trend_analysis_days: int = 14  # Days for trend analysis
+    # Bid Optimization Time Frames (14-day default per client requirements)
+    bid_optimization_lookback_days: int = 14  # Primary lookback window for bid decisions (enforced 14 days)
+    bid_optimization_short_window: int = 7  # Short-term window for trend analysis
+    bid_optimization_medium_window: int = 14  # Medium-term window for trend analysis
+    bid_optimization_long_window: int = 30  # Long-term window for trend analysis
+    previous_period_lookback_days: int = 14  # Days to look back for previous period comparison
     
     # Negative Keyword Rules
     negative_keyword_ctr_threshold: float = 0.1  # CTR below 0.1% triggers negative keyword
@@ -62,6 +82,12 @@ class RuleConfig:
     acos_hysteresis_upper: float = 0.35  # Upper bound for ACOS hysteresis (35% - tighter band)
     historical_smoothing_weight_recent: float = 0.7  # Weight for recent 7 days
     historical_smoothing_weight_older: float = 0.3  # Weight for older 7 days
+    # Performance Smoothing Configuration
+    enable_performance_smoothing: bool = True  # Enable smoothing for performance metrics
+    smoothing_method: str = 'exponential'  # 'exponential', 'weighted_moving_average', 'simple_moving_average'
+    exponential_smoothing_alpha: float = 0.3  # Alpha for exponential smoothing (0-1, lower = more smoothing)
+    moving_average_window: int = 7  # Window size for moving averages
+    min_data_points_for_smoothing: int = 3  # Minimum data points required for smoothing
     enable_re_entry_control: bool = True  # Enable re-entry control system
     enable_oscillation_detection: bool = True  # Enable bid oscillation detection
     oscillation_lookback_days: int = 14  # Days to look back for oscillation detection
@@ -111,6 +137,67 @@ class RuleConfig:
     # Budget Optimization
     aggressive_scale_roas: float = 5.0  # ROAS threshold for aggressive budget scaling
     
+    # Spend/Clicks Safeguard Configuration
+    enable_spend_safeguard: bool = True  # Enable spend spike detection
+    enable_clicks_safeguard: bool = True  # Enable clicks spike detection
+    spend_spike_threshold: float = 2.0  # 200% increase triggers safeguard (2.0 = 200%)
+    clicks_spike_threshold: float = 3.0  # 300% increase triggers safeguard (3.0 = 300%)
+    spend_safeguard_lookback_days: int = 3  # Days to compare for spike detection
+    safeguard_action: str = 'reduce_bid'  # 'reduce_bid', 'pause', 'alert' - action on spike detection
+    safeguard_bid_reduction_factor: float = 0.5  # Reduce bid by 50% when safeguard triggers
+    min_spend_for_safeguard: float = 10.0  # Minimum spend required to trigger safeguard ($10)
+    min_clicks_for_safeguard: int = 10  # Minimum clicks required to trigger safeguard
+    
+    # Order-Based Scaling Configuration
+    enable_order_based_scaling: bool = True  # Enable conversion count tier logic
+    order_tier_1: int = 1  # 1 conversion - minimal adjustment
+    order_tier_2_3: int = 3  # 2-3 conversions - moderate adjustment
+    order_tier_4_plus: int = 4  # 4+ conversions - aggressive scaling
+    order_tier_1_adjustment: float = 0.05  # 5% max adjustment for 1 conversion
+    order_tier_2_3_adjustment: float = 0.15  # 15% max adjustment for 2-3 conversions
+    order_tier_4_plus_adjustment: float = 0.30  # 30% max adjustment for 4+ conversions
+    
+    # Spend-Based No Sale Logic (Tiered)
+    enable_spend_no_sale_logic: bool = True  # Enable spend-tiered no-sale logic
+    no_sale_spend_tier_1: float = 10.0  # $10-15 threshold
+    no_sale_spend_tier_2: float = 15.0  # $16-30 threshold
+    no_sale_spend_tier_3: float = 30.0  # >$30 threshold
+    no_sale_reduction_tier_1: float = 0.15  # 15% bid reduction at $10-15
+    no_sale_reduction_tier_2: float = 0.25  # 25% bid reduction at $16-30
+    no_sale_reduction_tier_3: float = 0.35  # 35% bid reduction at >$30
+    
+    # CTR Combined Logic Configuration
+    ctr_critical_threshold: float = 0.2  # CTR < 0.2% triggers combined logic
+    enable_ctr_combined_logic: bool = True  # Enable CTR combined with spend/order logic
+    ctr_low_spend_threshold: float = 10.0  # Spend threshold for CTR+Spend logic ($10)
+    ctr_low_spend_reduction: float = 0.20  # -20% reduction for CTR <0.2% & Spend >$10
+    ctr_low_order_threshold: int = 3  # Order threshold for CTR+Order logic
+    # Impressions/Clicks Logic
+    enable_impressions_clicks_logic: bool = True  # Enable impressions >500 & clicks <3 rule
+    impressions_high_threshold: int = 500  # Impressions > 500
+    clicks_low_threshold: int = 3  # Clicks < 3
+    impressions_clicks_adjustment: float = 0.075  # +5-10% adjustment (using 7.5% average)
+    
+    # ACOS Trend Comparison (Previous vs Current 14 Days)
+    enable_acos_trend_comparison: bool = True  # Compare current vs previous 14-day periods
+    acos_trend_decline_threshold: float = 0.30  # 30% increase triggers -10% adjustment
+    acos_trend_improvement_threshold: float = 0.30  # 30% decrease triggers +10% adjustment
+    acos_trend_decline_adjustment: float = -0.10  # -10% when ACOS ↑ >30%
+    acos_trend_improvement_adjustment: float = 0.10  # +10% when ACOS ↓ >30%
+    skip_on_acos_decline: bool = False  # Don't skip, apply adjustment instead
+    
+    # Low Data Zone Configuration
+    enable_low_data_zone: bool = True  # Enable low data zone handling
+    low_data_spend_threshold: float = 5.0  # Spend < $5 = low data zone
+    low_data_clicks_threshold: int = 10  # Clicks < 10 = low data zone
+    low_data_zone_adjustment_limit: float = 0.0  # 0% adjustment in low data zone (hold)
+    
+    # New Keyword Logic (<14 days old)
+    enable_new_keyword_logic: bool = True  # Enable special logic for new keywords
+    new_keyword_age_days: int = 14  # Keywords <14 days old are considered "new"
+    new_keyword_adjustment_limit: float = 0.15  # Max 15% adjustment for new keywords
+    new_keyword_cooldown_days: int = 7  # Cooldown period for new keywords
+    
     # Learning Loop Configuration
     learning_success_threshold: float = 0.10  # 10% improvement = success
     learning_failure_threshold: float = -0.05  # -5% decline = failure
@@ -143,6 +230,18 @@ class RuleConfig:
             'acos_target': self.acos_target,
             'acos_tolerance': self.acos_tolerance,
             'acos_bid_adjustment_factor': self.acos_bid_adjustment_factor,
+            'acos_high_threshold': self.acos_high_threshold,
+            'acos_medium_high_threshold': self.acos_medium_high_threshold,
+            'acos_low_threshold': self.acos_low_threshold,
+            'acos_tier_very_high': self.acos_tier_very_high,
+            'acos_tier_high': self.acos_tier_high,
+            'acos_tier_medium_high': self.acos_tier_medium_high,
+            'acos_tier_medium': self.acos_tier_medium,
+            'acos_tier_target': self.acos_tier_target,
+            'acos_tier_good': self.acos_tier_good,
+            'acos_tier_low': self.acos_tier_low,
+            'acos_tier_very_low': self.acos_tier_very_low,
+            'acos_tier_excellent': self.acos_tier_excellent,
             'roas_target': self.roas_target,
             'roas_tolerance': self.roas_tolerance,
             'roas_bid_adjustment_factor': self.roas_bid_adjustment_factor,
@@ -160,6 +259,11 @@ class RuleConfig:
             'min_conversions': self.min_conversions,
             'performance_lookback_days': self.performance_lookback_days,
             'trend_analysis_days': self.trend_analysis_days,
+            'bid_optimization_lookback_days': self.bid_optimization_lookback_days,
+            'bid_optimization_short_window': self.bid_optimization_short_window,
+            'bid_optimization_medium_window': self.bid_optimization_medium_window,
+            'bid_optimization_long_window': self.bid_optimization_long_window,
+            'previous_period_lookback_days': self.previous_period_lookback_days,
             'negative_keyword_ctr_threshold': self.negative_keyword_ctr_threshold,
             'negative_keyword_impression_threshold': self.negative_keyword_impression_threshold,
             'max_daily_adjustments': self.max_daily_adjustments,
@@ -172,6 +276,11 @@ class RuleConfig:
             'acos_hysteresis_upper': self.acos_hysteresis_upper,
             'historical_smoothing_weight_recent': self.historical_smoothing_weight_recent,
             'historical_smoothing_weight_older': self.historical_smoothing_weight_older,
+            'enable_performance_smoothing': self.enable_performance_smoothing,
+            'smoothing_method': self.smoothing_method,
+            'exponential_smoothing_alpha': self.exponential_smoothing_alpha,
+            'moving_average_window': self.moving_average_window,
+            'min_data_points_for_smoothing': self.min_data_points_for_smoothing,
             'enable_re_entry_control': self.enable_re_entry_control,
             'enable_oscillation_detection': self.enable_oscillation_detection,
             'oscillation_lookback_days': self.oscillation_lookback_days,
@@ -209,6 +318,59 @@ class RuleConfig:
             'weight_seasonality': self.weight_seasonality,
             'weight_profit': self.weight_profit,
             'aggressive_scale_roas': self.aggressive_scale_roas,
+            # Spend/Clicks Safeguard
+            'enable_spend_safeguard': self.enable_spend_safeguard,
+            'enable_clicks_safeguard': self.enable_clicks_safeguard,
+            'spend_spike_threshold': self.spend_spike_threshold,
+            'clicks_spike_threshold': self.clicks_spike_threshold,
+            'spend_safeguard_lookback_days': self.spend_safeguard_lookback_days,
+            'safeguard_action': self.safeguard_action,
+            'safeguard_bid_reduction_factor': self.safeguard_bid_reduction_factor,
+            'min_spend_for_safeguard': self.min_spend_for_safeguard,
+            'min_clicks_for_safeguard': self.min_clicks_for_safeguard,
+            # Order-Based Scaling
+            'enable_order_based_scaling': self.enable_order_based_scaling,
+            'order_tier_1': self.order_tier_1,
+            'order_tier_2_3': self.order_tier_2_3,
+            'order_tier_4_plus': self.order_tier_4_plus,
+            'order_tier_1_adjustment': self.order_tier_1_adjustment,
+            'order_tier_2_3_adjustment': self.order_tier_2_3_adjustment,
+            'order_tier_4_plus_adjustment': self.order_tier_4_plus_adjustment,
+            # Spend-Based No Sale Logic
+            'enable_spend_no_sale_logic': self.enable_spend_no_sale_logic,
+            'no_sale_spend_tier_1': self.no_sale_spend_tier_1,
+            'no_sale_spend_tier_2': self.no_sale_spend_tier_2,
+            'no_sale_spend_tier_3': self.no_sale_spend_tier_3,
+            'no_sale_reduction_tier_1': self.no_sale_reduction_tier_1,
+            'no_sale_reduction_tier_2': self.no_sale_reduction_tier_2,
+            'no_sale_reduction_tier_3': self.no_sale_reduction_tier_3,
+            # CTR Combined Logic
+            'ctr_critical_threshold': self.ctr_critical_threshold,
+            'enable_ctr_combined_logic': self.enable_ctr_combined_logic,
+            'ctr_low_spend_threshold': self.ctr_low_spend_threshold,
+            'ctr_low_spend_reduction': self.ctr_low_spend_reduction,
+            'ctr_low_order_threshold': self.ctr_low_order_threshold,
+            'enable_impressions_clicks_logic': self.enable_impressions_clicks_logic,
+            'impressions_high_threshold': self.impressions_high_threshold,
+            'clicks_low_threshold': self.clicks_low_threshold,
+            'impressions_clicks_adjustment': self.impressions_clicks_adjustment,
+            # ACOS Trend Comparison
+            'enable_acos_trend_comparison': self.enable_acos_trend_comparison,
+            'acos_trend_decline_threshold': self.acos_trend_decline_threshold,
+            'acos_trend_improvement_threshold': self.acos_trend_improvement_threshold,
+            'acos_trend_decline_adjustment': self.acos_trend_decline_adjustment,
+            'acos_trend_improvement_adjustment': self.acos_trend_improvement_adjustment,
+            'skip_on_acos_decline': self.skip_on_acos_decline,
+            # Low Data Zone
+            'enable_low_data_zone': self.enable_low_data_zone,
+            'low_data_spend_threshold': self.low_data_spend_threshold,
+            'low_data_clicks_threshold': self.low_data_clicks_threshold,
+            'low_data_zone_adjustment_limit': self.low_data_zone_adjustment_limit,
+            # New Keyword Logic
+            'enable_new_keyword_logic': self.enable_new_keyword_logic,
+            'new_keyword_age_days': self.new_keyword_age_days,
+            'new_keyword_adjustment_limit': self.new_keyword_adjustment_limit,
+            'new_keyword_cooldown_days': self.new_keyword_cooldown_days,
             # Learning Loop
             'learning_success_threshold': self.learning_success_threshold,
             'learning_failure_threshold': self.learning_failure_threshold,

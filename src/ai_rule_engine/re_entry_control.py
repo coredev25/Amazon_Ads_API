@@ -57,7 +57,7 @@ class ReEntryController:
         self.cooldown_days = config.get('bid_change_cooldown_days', 3)
         self.min_change_threshold = config.get('min_bid_change_threshold', 0.05)
         self.stability_window = config.get('acos_stability_window', 1)
-        self.acos_target = config.get('acos_target', 0.30)  # 30% target ACOS
+        self.acos_target = config.get('acos_target', 0.09)  # 9% target ACOS
         self.hysteresis_lower = config.get('acos_hysteresis_lower', 0.25)
         self.hysteresis_upper = config.get('acos_hysteresis_upper', 0.35)
         self.smoothing_recent = config.get('historical_smoothing_weight_recent', 0.7)

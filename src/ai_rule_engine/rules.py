@@ -80,7 +80,7 @@ class ACOSRule(BaseRule):
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.target_acos = config.get('acos_target', 0.30)
+        self.target_acos = config.get('acos_target', 0.09)
         self.tolerance = config.get('acos_tolerance', 0.05)
         self.adjustment_factor = config.get('acos_bid_adjustment_factor', 0.1)
         self.min_conversions = config.get('min_conversions', 1)
@@ -164,7 +164,7 @@ class ROASRule(BaseRule):
     
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.target_roas = config.get('roas_target', 4.0)
+        self.target_roas = config.get('roas_target', 11.11)
         self.tolerance = config.get('roas_tolerance', 0.5)
         self.adjustment_factor = config.get('roas_bid_adjustment_factor', 0.15)
         self.min_conversions = config.get('min_conversions', 1)
@@ -249,7 +249,7 @@ class CTRRule(BaseRule):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.minimum_ctr = config.get('ctr_minimum', 0.5)
-        self.target_ctr = config.get('ctr_target', 2.0)
+        self.target_ctr = config.get('ctr_target', 0.50)
         self.adjustment_factor = config.get('ctr_bid_adjustment_factor', 0.2)
         self.min_impressions = config.get('min_impressions', 100)
     
