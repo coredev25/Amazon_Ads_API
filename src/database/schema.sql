@@ -140,23 +140,33 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Apply trigger to all tables
+-- Apply trigger to all tables (idempotent - drop if exists first)
+DROP TRIGGER IF EXISTS update_campaigns_updated_at ON campaigns;
 CREATE TRIGGER update_campaigns_updated_at BEFORE UPDATE ON campaigns
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_ad_groups_updated_at ON ad_groups;
 CREATE TRIGGER update_ad_groups_updated_at BEFORE UPDATE ON ad_groups
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_keywords_updated_at ON keywords;
 CREATE TRIGGER update_keywords_updated_at BEFORE UPDATE ON keywords
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_campaign_performance_updated_at ON campaign_performance;
 CREATE TRIGGER update_campaign_performance_updated_at BEFORE UPDATE ON campaign_performance
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_ad_group_performance_updated_at ON ad_group_performance;
 CREATE TRIGGER update_ad_group_performance_updated_at BEFORE UPDATE ON ad_group_performance
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_keyword_performance_updated_at ON keyword_performance;
 CREATE TRIGGER update_keyword_performance_updated_at BEFORE UPDATE ON keyword_performance
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_bid_constraints_updated_at ON bid_constraints;
+CREATE TRIGGER update_bid_constraints_updated_at BEFORE UPDATE ON bid_constraints
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================================
@@ -216,6 +226,18 @@ CREATE TABLE IF NOT EXISTS bid_adjustment_locks (
     last_change_id INT REFERENCES bid_change_history(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(entity_id, entity_type)
+);
+
+-- Table for bid constraint overrides (per ASIN/category/product)
+CREATE TABLE IF NOT EXISTS bid_constraints (
+    id SERIAL PRIMARY KEY,
+    constraint_type VARCHAR(50) NOT NULL, -- 'asin', 'category', 'campaign'
+    constraint_key TEXT NOT NULL,
+    bid_cap DECIMAL(10, 2),
+    bid_floor DECIMAL(10, 2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(constraint_type, constraint_key)
 );
 
 -- Table for detecting bid oscillation
@@ -364,16 +386,88 @@ CREATE INDEX IF NOT EXISTS idx_ai_rule_logs_date ON ai_rule_execution_logs(execu
 CREATE INDEX IF NOT EXISTS idx_ai_rule_logs_entity ON ai_rule_execution_logs(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_ai_config_overrides_entity ON ai_rule_config_overrides(entity_type, entity_id);
 
--- Apply triggers to new tables
+-- Apply triggers to new tables (idempotent - drop if exists first)
+DROP TRIGGER IF EXISTS update_bid_oscillation_updated_at ON bid_oscillation_detection;
 CREATE TRIGGER update_bid_oscillation_updated_at BEFORE UPDATE ON bid_oscillation_detection
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_negative_history_updated_at ON negative_keyword_history;
 CREATE TRIGGER update_negative_history_updated_at BEFORE UPDATE ON negative_keyword_history
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_search_term_performance_updated_at ON search_term_performance;
 CREATE TRIGGER update_search_term_performance_updated_at BEFORE UPDATE ON search_term_performance
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_ai_config_overrides_updated_at ON ai_rule_config_overrides;
 CREATE TRIGGER update_ai_config_overrides_updated_at BEFORE UPDATE ON ai_rule_config_overrides
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
+-- LEARNING LOOP & ML TABLES
+-- ============================================================================
+
+-- Table for tracking recommendations (FIX #1)
+CREATE TABLE IF NOT EXISTS recommendation_tracking (
+    recommendation_id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id BIGINT NOT NULL,
+    adjustment_type TEXT NOT NULL,
+    recommended_value FLOAT NOT NULL,
+    current_value FLOAT NOT NULL,
+    intelligence_signals JSONB,
+    strategy_id TEXT,
+    policy_variant TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    applied BOOLEAN DEFAULT FALSE,
+    applied_at TIMESTAMP,
+    metadata JSONB
+);
+
+-- Table for learning outcomes (FIX #14)
+CREATE TABLE IF NOT EXISTS learning_outcomes (
+    id SERIAL PRIMARY KEY,
+    recommendation_id TEXT NOT NULL REFERENCES recommendation_tracking(recommendation_id),
+    entity_type TEXT NOT NULL,
+    entity_id BIGINT NOT NULL,
+    adjustment_type TEXT NOT NULL,
+    recommended_value FLOAT NOT NULL,
+    applied_value FLOAT NOT NULL,
+    before_metrics JSONB NOT NULL,
+    after_metrics JSONB NOT NULL,
+    outcome VARCHAR(20) NOT NULL, -- 'success', 'failure', 'neutral'
+    improvement_percentage FLOAT NOT NULL,
+    label INT NOT NULL, -- 1 for success, 0 for failure/neutral
+    strategy_id TEXT,
+    policy_variant TEXT,
+    is_holdout BOOLEAN DEFAULT FALSE,
+    features JSONB,
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS model_training_runs (
+    id SERIAL PRIMARY KEY,
+    model_version INT NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    train_accuracy FLOAT,
+    test_accuracy FLOAT,
+    train_auc FLOAT,
+    test_auc FLOAT,
+    brier_score FLOAT,
+    promoted BOOLEAN DEFAULT FALSE,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- Create indexes for learning tables
+CREATE INDEX IF NOT EXISTS idx_recommendation_tracking_entity ON recommendation_tracking(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_recommendation_tracking_applied ON recommendation_tracking(applied);
+CREATE INDEX IF NOT EXISTS idx_recommendation_tracking_strategy ON recommendation_tracking(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_learning_outcomes_recommendation ON learning_outcomes(recommendation_id);
+CREATE INDEX IF NOT EXISTS idx_learning_outcomes_entity ON learning_outcomes(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_learning_outcomes_timestamp ON learning_outcomes(timestamp);
+CREATE INDEX IF NOT EXISTS idx_learning_outcomes_strategy ON learning_outcomes(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_bid_constraints_key ON bid_constraints(constraint_type, constraint_key);
+CREATE INDEX IF NOT EXISTS idx_model_training_runs_status ON model_training_runs(status);
 

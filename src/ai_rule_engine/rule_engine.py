@@ -3,7 +3,7 @@ Main AI Rule Engine implementation
 """
 
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import json
 
@@ -11,14 +11,11 @@ from .config import RuleConfig
 from .database import DatabaseConnector
 from .rules import ACOSRule, ROASRule, CTRRule, NegativeKeywordRule, BudgetRule
 from .recommendations import RecommendationEngine, Recommendation
-from .intelligence_engines import (
-    IntelligenceOrchestrator, IntelligenceSignal,
-    DataIntelligenceEngine, KeywordIntelligenceEngine,
-    LongTailEngine, RankingEngine, SeasonalityEngine, ProfitEngine
-)
-from .negative_manager import NegativeKeywordManager, NegativeKeywordCandidate
-from .bid_optimizer import BidOptimizationEngine, BudgetOptimizationEngine, BidOptimization
+from .intelligence_engines import IntelligenceOrchestrator
+from .negative_manager import NegativeKeywordManager
+from .bid_optimizer import BidOptimizationEngine, BudgetOptimizationEngine
 from .learning_loop import LearningLoop, ModelTrainer
+from .telemetry import TelemetryClient
 
 
 class AIRuleEngine:
@@ -35,6 +32,7 @@ class AIRuleEngine:
         self.config = config
         self.db = db_connector
         self.logger = logging.getLogger(__name__)
+        self.telemetry = TelemetryClient(config.__dict__)
         
         # Initialize traditional rules
         self.rules = {
@@ -60,8 +58,8 @@ class AIRuleEngine:
         
         # Initialize learning loop (if enabled) - must be before bid optimizer
         if config.enable_learning_loop:
-            self.learning_loop = LearningLoop(config.__dict__)
-            self.model_trainer = ModelTrainer(config.__dict__, db_connector)
+            self.learning_loop = LearningLoop(config.__dict__, db_connector, telemetry=self.telemetry)  # FIX #1: Pass db_connector
+            self.model_trainer = ModelTrainer(config.__dict__, db_connector, telemetry=self.telemetry)  # FIX #21: Pass telemetry
             self.logger.info("Learning loop enabled")
         else:
             self.learning_loop = None
@@ -73,7 +71,8 @@ class AIRuleEngine:
                 config.__dict__, 
                 db_connector,
                 model_trainer=self.model_trainer,  # For STEP 5: Predictive gating
-                learning_loop=self.learning_loop   # For STEP 7: Campaign adaptivity
+                learning_loop=self.learning_loop,   # For STEP 7: Campaign adaptivity
+                telemetry=self.telemetry
             )
             self.budget_optimizer = BudgetOptimizationEngine(config.__dict__)
             self.logger.info("Advanced bid optimization enabled with re-entry control and learning loop")
@@ -156,6 +155,14 @@ class AIRuleEngine:
         
         self.logger.info(f"Generated {len(filtered_recs)} recommendations from {len(all_recommendations)} total")
         
+        # Observability: Track recommendations per day (#21)
+        self.telemetry.gauge('ai_rule_engine_recommendations', len(filtered_recs))
+        self.telemetry.increment(
+            'ai_rule_engine_recommendations_daily',
+            value=len(filtered_recs),
+            labels={'date': datetime.now().strftime('%Y-%m-%d')}
+        )
+        
         return filtered_recs
     
     def _analyze_entity(self, entity_type: str, entity_id: int, 
@@ -232,7 +239,8 @@ class AIRuleEngine:
                             self.bid_optimizer.log_bid_change(
                                 bid_optimization, 
                                 current_metrics,
-                                performance_data=performance_data  # Pass performance data for 14-day averages
+                                performance_data=performance_data,  # Pass raw performance data for fallback
+                                performance_snapshot=bid_optimization.metadata.get('performance_snapshot')
                             )
                         except Exception as e:
                             self.logger.error(f"Error logging bid change: {e}")
@@ -252,7 +260,8 @@ class AIRuleEngine:
                         reason=bid_optimization.reason,
                         rules_triggered=['BID_OPTIMIZER'],
                         metadata=bid_optimization.metadata,
-                        created_at=datetime.now()
+                        created_at=datetime.now(),
+                        strategy_id=bid_optimization.metadata.get('strategy_id')
                     )
                     
                     # Record adjustment for cooldown tracking (legacy)

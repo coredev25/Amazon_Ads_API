@@ -64,11 +64,11 @@ class DatabaseConnector:
             attributed_sales_7d,
             CASE 
                 WHEN cost > 0 THEN (attributed_sales_7d / cost)
-                ELSE 0 
+                ELSE NULL 
             END as roas_7d,
             CASE 
                 WHEN attributed_sales_7d > 0 THEN (cost / attributed_sales_7d)
-                ELSE 0 
+                ELSE NULL 
             END as acos_7d,
             CASE 
                 WHEN impressions > 0 THEN (clicks::float / impressions * 100)
@@ -110,11 +110,11 @@ class DatabaseConnector:
             attributed_sales_7d,
             CASE 
                 WHEN cost > 0 THEN (attributed_sales_7d / cost)
-                ELSE 0 
+                ELSE NULL 
             END as roas_7d,
             CASE 
                 WHEN attributed_sales_7d > 0 THEN (cost / attributed_sales_7d)
-                ELSE 0 
+                ELSE NULL 
             END as acos_7d,
             CASE 
                 WHEN impressions > 0 THEN (clicks::float / impressions * 100)
@@ -156,11 +156,11 @@ class DatabaseConnector:
             attributed_sales_7d,
             CASE 
                 WHEN cost > 0 THEN (attributed_sales_7d / cost)
-                ELSE 0 
+                ELSE NULL 
             END as roas_7d,
             CASE 
                 WHEN attributed_sales_7d > 0 THEN (cost / attributed_sales_7d)
-                ELSE 0 
+                ELSE NULL 
             END as acos_7d,
             CASE 
                 WHEN impressions > 0 THEN (clicks::float / impressions * 100)
@@ -203,11 +203,11 @@ class DatabaseConnector:
             COALESCE(SUM(cp.attributed_sales_7d), 0) as total_sales,
             CASE 
                 WHEN SUM(cp.cost) > 0 THEN (SUM(cp.attributed_sales_7d) / SUM(cp.cost))
-                ELSE 0 
+                ELSE NULL 
             END as avg_roas,
             CASE 
                 WHEN SUM(cp.attributed_sales_7d) > 0 THEN (SUM(cp.cost) / SUM(cp.attributed_sales_7d))
-                ELSE 0 
+                ELSE NULL 
             END as avg_acos,
             CASE 
                 WHEN SUM(cp.impressions) > 0 THEN (SUM(cp.clicks)::float / SUM(cp.impressions) * 100)
@@ -252,11 +252,11 @@ class DatabaseConnector:
             COALESCE(SUM(agp.attributed_sales_7d), 0) as total_sales,
             CASE 
                 WHEN SUM(agp.cost) > 0 THEN (SUM(agp.attributed_sales_7d) / SUM(agp.cost))
-                ELSE 0 
+                ELSE NULL 
             END as avg_roas,
             CASE 
                 WHEN SUM(agp.attributed_sales_7d) > 0 THEN (SUM(agp.cost) / SUM(agp.attributed_sales_7d))
-                ELSE 0 
+                ELSE NULL 
             END as avg_acos,
             CASE 
                 WHEN SUM(agp.impressions) > 0 THEN (SUM(agp.clicks)::float / SUM(agp.impressions) * 100)
@@ -304,11 +304,11 @@ class DatabaseConnector:
             COALESCE(SUM(kp.attributed_sales_7d), 0) as total_sales,
             CASE 
                 WHEN SUM(kp.cost) > 0 THEN (SUM(kp.attributed_sales_7d) / SUM(kp.cost))
-                ELSE 0 
+                ELSE NULL 
             END as avg_roas,
             CASE 
                 WHEN SUM(kp.attributed_sales_7d) > 0 THEN (SUM(kp.cost) / SUM(kp.attributed_sales_7d))
-                ELSE 0 
+                ELSE NULL 
             END as avg_acos,
             CASE 
                 WHEN SUM(kp.impressions) > 0 THEN (SUM(kp.clicks)::float / SUM(kp.impressions) * 100)
@@ -459,7 +459,7 @@ class DatabaseConnector:
             self.logger.error(f"Error fetching bid change history: {e}")
             return []
     
-    def save_bid_change(self, change_record: Dict[str, Any]) -> bool:
+    def save_bid_change(self, change_record: Dict[str, Any]) -> Optional[int]:
         """
         Save a bid change record to the database
         
@@ -467,7 +467,7 @@ class DatabaseConnector:
             change_record: Bid change record dictionary
             
         Returns:
-            True if successful, False otherwise
+            Inserted change ID if successful, None otherwise
         """
         query = """
         INSERT INTO bid_change_history (
@@ -488,13 +488,17 @@ class DatabaseConnector:
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(query, change_record)
-                    change_id = cursor.fetchone()[0]
+                    change_id_row = cursor.fetchone()
                     conn.commit()
-                    self.logger.info(f"Bid change saved: ID {change_id}")
-                    return True
+                    if change_id_row:
+                        change_id = change_id_row[0]
+                        self.logger.info(f"Bid change saved: ID {change_id}")
+                        return change_id
+                    self.logger.error("Bid change insert returned no ID")
+                    return None
         except Exception as e:
             self.logger.error(f"Error saving bid change: {e}")
-            return False
+            return None
     
     def get_acos_history(self, entity_type: str, entity_id: int, 
                         days_back: int = 14) -> List[Dict[str, Any]]:
@@ -528,7 +532,7 @@ class DatabaseConnector:
             report_date as check_date,
             CASE 
                 WHEN attributed_sales_7d > 0 THEN (cost / attributed_sales_7d)
-                ELSE 0 
+                ELSE NULL 
             END as acos_value,
             cost,
             attributed_sales_7d as sales
@@ -658,6 +662,7 @@ class DatabaseConnector:
             locked_until = EXCLUDED.locked_until,
             lock_reason = EXCLUDED.lock_reason,
             last_change_id = EXCLUDED.last_change_id
+        WHERE bid_adjustment_locks.locked_until < EXCLUDED.locked_until
         """
         
         locked_until = datetime.now() + timedelta(days=lock_days)
@@ -701,3 +706,363 @@ class DatabaseConnector:
         except Exception as e:
             self.logger.error(f"Error fetching oscillating entities: {e}")
             return []
+
+    def get_bid_constraint(self, constraint_type: str, constraint_key: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch bid constraint override for given type/key (e.g., ASIN or category)
+        """
+        query = """
+        SELECT bid_cap, bid_floor
+        FROM bid_constraints
+        WHERE constraint_type = %s AND constraint_key = %s
+        LIMIT 1
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (constraint_type, constraint_key))
+                    result = cursor.fetchone()
+                    return dict(result) if result else None
+        except Exception as e:
+            self.logger.error(f"Error fetching bid constraint for {constraint_type}:{constraint_key}: {e}")
+            return None
+
+    def get_entity_performance_range(self, entity_type: str, entity_id: int,
+                                     start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+        """
+        Retrieve raw performance rows for an entity between two dates.
+        Used by evaluation pipeline for outcome analysis.
+        """
+        table_map = {
+            'campaign': ('campaign_performance', 'campaign_id'),
+            'ad_group': ('ad_group_performance', 'ad_group_id'),
+            'keyword': ('keyword_performance', 'keyword_id')
+        }
+        if entity_type not in table_map:
+            self.logger.error(f"Unsupported entity type for performance range: {entity_type}")
+            return []
+        table, column = table_map[entity_type]
+        query = f"""
+        SELECT
+            report_date,
+            impressions,
+            clicks,
+            cost,
+            attributed_conversions_7d,
+            attributed_sales_7d
+        FROM {table}
+        WHERE {column} = %s
+          AND report_date BETWEEN %s AND %s
+        ORDER BY report_date ASC
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (entity_id, start_date, end_date))
+                    return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Error fetching performance range for {entity_type} {entity_id}: {e}")
+            return []
+
+    def create_model_training_run(self, model_version: int, status: str,
+                                  metrics: Optional[Dict[str, Any]] = None) -> Optional[int]:
+        """
+        Persist a model training run record for observability/versioning.
+        """
+        query = """
+        INSERT INTO model_training_runs (
+            model_version, status, train_accuracy, test_accuracy,
+            train_auc, test_auc, brier_score, promoted, started_at
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+        ) RETURNING id
+        """
+        metrics = metrics or {}
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (
+                        model_version,
+                        status,
+                        metrics.get('train_accuracy'),
+                        metrics.get('test_accuracy'),
+                        metrics.get('train_auc'),
+                        metrics.get('test_auc'),
+                        metrics.get('brier_score'),
+                        metrics.get('promoted', False)
+                    ))
+                    run_id = cursor.fetchone()[0]
+                    conn.commit()
+                    return run_id
+        except Exception as e:
+            self.logger.error(f"Error creating model training run: {e}")
+            return None
+
+    def update_model_training_run(self, run_id: int, status: str,
+                                  metrics: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Update status/metrics for an existing training run.
+        """
+        metrics = metrics or {}
+        query = """
+        UPDATE model_training_runs
+        SET status = %s,
+            train_accuracy = COALESCE(%s, train_accuracy),
+            test_accuracy = COALESCE(%s, test_accuracy),
+            train_auc = COALESCE(%s, train_auc),
+            test_auc = COALESCE(%s, test_auc),
+            brier_score = COALESCE(%s, brier_score),
+            promoted = COALESCE(%s, promoted),
+            completed_at = CASE
+                WHEN %s IN ('success','failed') THEN CURRENT_TIMESTAMP
+                ELSE completed_at
+            END
+        WHERE id = %s
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (
+                        status,
+                        metrics.get('train_accuracy'),
+                        metrics.get('test_accuracy'),
+                        metrics.get('train_auc'),
+                        metrics.get('test_auc'),
+                        metrics.get('brier_score'),
+                        metrics.get('promoted'),
+                        status,
+                        run_id
+                    ))
+                    conn.commit()
+                    return True
+        except Exception as e:
+            self.logger.error(f"Error updating model training run {run_id}: {e}")
+            return False
+    
+    def get_latest_model_training_run(self) -> Optional[Dict[str, Any]]:
+        """Return most recent training run for retraining heuristics (#16)."""
+        query = """
+        SELECT *
+        FROM model_training_runs
+        ORDER BY started_at DESC
+        LIMIT 1
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query)
+                    result = cursor.fetchone()
+                    return dict(result) if result else None
+        except Exception as e:
+            self.logger.error(f"Error fetching latest model training run: {e}")
+            return None
+    
+    # ============================================================================
+    # LEARNING LOOP & RECOMMENDATION TRACKING METHODS (FIX #1, #2, #14)
+    # ============================================================================
+    
+    def save_recommendation(self, tracking_data: Dict[str, Any]) -> bool:
+        """
+        FIX #1: Save recommendation tracking data to database
+        
+        Args:
+            tracking_data: Recommendation tracking dictionary
+            
+        Returns:
+            True if successful
+        """
+        query = """
+        INSERT INTO recommendation_tracking (
+            recommendation_id, entity_type, entity_id, adjustment_type,
+            recommended_value, current_value, intelligence_signals,
+            strategy_id, policy_variant, created_at, applied, metadata
+        ) VALUES (
+            %(recommendation_id)s, %(entity_type)s, %(entity_id)s, %(adjustment_type)s,
+            %(recommended_value)s, %(current_value)s, %(intelligence_signals)s,
+            %(strategy_id)s, %(policy_variant)s, %(timestamp)s, %(applied)s, %(metadata)s
+        )
+        ON CONFLICT (recommendation_id) DO UPDATE SET
+            applied = EXCLUDED.applied,
+            applied_at = CASE WHEN EXCLUDED.applied THEN CURRENT_TIMESTAMP ELSE recommendation_tracking.applied_at END
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, tracking_data)
+                    conn.commit()
+                    return True
+        except Exception as e:
+            self.logger.error(f"Error saving recommendation: {e}")
+            return False
+    
+    def get_tracked_recommendation(self, recommendation_id: str) -> Optional[Dict[str, Any]]:
+        """
+        FIX #2: Get tracked recommendation from database
+        
+        Args:
+            recommendation_id: Recommendation ID
+            
+        Returns:
+            Tracking data dictionary or None
+        """
+        query = """
+        SELECT 
+            recommendation_id, entity_type, entity_id, adjustment_type,
+            recommended_value, current_value, intelligence_signals,
+            strategy_id, policy_variant,
+            created_at, applied, applied_at, metadata
+        FROM recommendation_tracking
+        WHERE recommendation_id = %s
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (recommendation_id,))
+                    result = cursor.fetchone()
+                    return dict(result) if result else None
+        except Exception as e:
+            self.logger.error(f"Error fetching tracked recommendation: {e}")
+            return None
+    
+    def save_learning_outcome(self, outcome: 'PerformanceOutcome', 
+                            intelligence_signals: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        FIX #14: Save learning outcome to database for long-term training
+        
+        Args:
+            outcome: PerformanceOutcome object
+            intelligence_signals: Optional intelligence signals
+            
+        Returns:
+            True if successful
+        """
+        # Prepare features for ML (simplified version)
+        features = {
+            'before_acos': outcome.before_metrics.get('acos'),
+            'before_roas': outcome.before_metrics.get('roas'),
+            'before_ctr': outcome.before_metrics.get('ctr'),
+            'before_conversions': outcome.before_metrics.get('conversions'),
+            'before_spend': outcome.before_metrics.get('spend'),
+            'before_sales': outcome.before_metrics.get('sales'),
+            'adjustment_type': outcome.adjustment_type,
+            'recommended_value': outcome.recommended_value,
+            'applied_value': outcome.applied_value,
+            'intelligence_signals': intelligence_signals
+        }
+        
+        query = """
+        INSERT INTO learning_outcomes (
+            recommendation_id, entity_type, entity_id, adjustment_type,
+            recommended_value, applied_value, before_metrics, after_metrics,
+            outcome, improvement_percentage, label, strategy_id, policy_variant,
+            is_holdout, features, timestamp
+        ) VALUES (
+            %(recommendation_id)s, %(entity_type)s, %(entity_id)s, %(adjustment_type)s,
+            %(recommended_value)s, %(applied_value)s, %(before_metrics)s, %(after_metrics)s,
+            %(outcome)s, %(improvement_percentage)s, %(label)s, %(strategy_id)s,
+            %(policy_variant)s, %(is_holdout)s, %(features)s, %(timestamp)s
+        )
+        """
+        
+        try:
+            import json
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, {
+                        'recommendation_id': outcome.recommendation_id,
+                        'entity_type': outcome.entity_type,
+                        'entity_id': outcome.entity_id,
+                        'adjustment_type': outcome.adjustment_type,
+                        'recommended_value': outcome.recommended_value,
+                        'applied_value': outcome.applied_value,
+                        'before_metrics': json.dumps(outcome.before_metrics),
+                        'after_metrics': json.dumps(outcome.after_metrics),
+                        'outcome': outcome.outcome,
+                        'improvement_percentage': outcome.improvement_percentage,
+                        'label': 1 if outcome.outcome == 'success' else 0,
+                        'strategy_id': getattr(outcome, 'strategy_id', None),
+                        'policy_variant': getattr(outcome, 'policy_variant', None),
+                        'is_holdout': getattr(outcome, 'is_holdout', False),
+                        'features': json.dumps(features),
+                        'timestamp': outcome.timestamp
+                    })
+                    conn.commit()
+                    return True
+        except Exception as e:
+            self.logger.error(f"Error saving learning outcome: {e}")
+            return False
+    
+    def get_bid_changes_for_evaluation(self, min_age_days: int = 14) -> List[Dict[str, Any]]:
+        """
+        Get bid changes that are ready for evaluation (≥14 days old)
+        
+        Args:
+            min_age_days: Minimum age in days
+            
+        Returns:
+            List of bid changes ready for evaluation
+        """
+        query = """
+        SELECT 
+            id, entity_type, entity_id, change_date,
+            old_bid, new_bid, performance_before, performance_after,
+            outcome_score, outcome_label, evaluated_at
+        FROM bid_change_history
+        WHERE evaluated_at IS NULL
+            AND change_date <= %s
+            AND performance_before IS NOT NULL
+        ORDER BY change_date ASC
+        """
+        
+        cutoff_date = datetime.now() - timedelta(days=min_age_days)
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query, (cutoff_date,))
+                    return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Error fetching bid changes for evaluation: {e}")
+            return []
+    
+    def update_bid_change_outcome(self, change_id: int, outcome_score: float,
+                                 outcome_label: str, performance_after: Dict[str, float]) -> bool:
+        """
+        Update bid change with outcome evaluation results
+        
+        Args:
+            change_id: Bid change ID
+            outcome_score: Outcome score
+            outcome_label: Outcome label ('success', 'failure', 'neutral')
+            performance_after: Performance metrics after change
+            
+        Returns:
+            True if successful
+        """
+        query = """
+        UPDATE bid_change_history
+        SET outcome_score = %s,
+            outcome_label = %s,
+            performance_after = %s,
+            evaluated_at = %s
+        WHERE id = %s
+        """
+        
+        try:
+            import json
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (
+                        outcome_score,
+                        outcome_label,
+                        json.dumps(performance_after),
+                        datetime.now(),
+                        change_id
+                    ))
+                    conn.commit()
+                    return True
+        except Exception as e:
+            self.logger.error(f"Error updating bid change outcome: {e}")
+            return False

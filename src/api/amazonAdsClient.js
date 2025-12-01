@@ -52,65 +52,117 @@ class AmazonAdsClient {
   }
 
   /**
-   * Make an authenticated API request
+   * Make an authenticated API request with retry logic
    */
-  async makeRequest(method, endpoint, data = null, params = null) {
-    try {
-      const token = await this.getAccessToken();
+  async makeRequest(method, endpoint, data = null, params = null, retries = 3, baseDelay = 1000) {
+    const maxRetries = retries;
+    let lastError;
 
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Amazon-Advertising-API-ClientId': this.config.clientId,
-        'Amazon-Advertising-API-Scope': this.config.profileId,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      };
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const token = await this.getAccessToken();
 
-      const requestConfig = {
-        method,
-        url: `${this.config.endpoint}${endpoint}`,
-        headers,
-        params
-      };
+        const headers = {
+          'Authorization': `Bearer ${token}`,
+          'Amazon-Advertising-API-ClientId': this.config.clientId,
+          'Amazon-Advertising-API-Scope': this.config.profileId,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        };
 
-      if (data) {
-        requestConfig.data = data;
-      }
+        const requestConfig = {
+          method,
+          url: `${this.config.endpoint}${endpoint}`,
+          headers,
+          params,
+          timeout: 60000 // 60 second timeout for large requests
+        };
 
-      logger.debug(`Making API request: ${method} ${this.config.endpoint}${endpoint}`, { params });
-
-      const response = await axios(requestConfig);
-      return response.data;
-    } catch (error) {
-      logger.error(`API request failed: ${method} ${endpoint}`, {
-        error: error.response?.data || error.message,
-        status: error.response?.status,
-        url: `${this.config.endpoint}${endpoint}`
-      });
-      
-      // Provide more specific error messages
-      if (error.response?.status === 404) {
-        throw new Error(`API endpoint not found: ${endpoint}. Please check if the API version is correct.`);
-      } else if (error.response?.status === 401) {
-        throw new Error('Authentication failed. Please check your API credentials.');
-      } else if (error.response?.status === 403) {
-        throw new Error('Access forbidden. Please check your API permissions and profile ID.');
-      } else if (error.response?.status === 425) {
-        // Handle duplicate report requests - extract the duplicate report ID
-        const errorDetail = error.response.data?.detail || '';
-        const reportIdMatch = errorDetail.match(/duplicate of : ([a-f0-9-]+)/);
-        if (reportIdMatch) {
-          const duplicateReportId = reportIdMatch[1];
-          logger.info(`Report request is a duplicate of existing report: ${duplicateReportId}`);
-          logger.info(`Using existing report instead of creating a new one`);
-          // Return the duplicate report ID instead of throwing an error
-          return { reportId: duplicateReportId };
+        if (data) {
+          requestConfig.data = data;
         }
-        throw new Error(`Duplicate request detected: ${errorDetail}`);
+
+        if (attempt > 0) {
+          logger.info(`Retrying API request (attempt ${attempt + 1}/${maxRetries + 1}): ${method} ${endpoint}`);
+        } else {
+          logger.debug(`Making API request: ${method} ${this.config.endpoint}${endpoint}`, { params });
+        }
+
+        const response = await axios(requestConfig);
+        return response.data;
+      } catch (error) {
+        lastError = error;
+        
+        // Don't retry on client errors (4xx) except for specific cases
+        if (error.response?.status) {
+          const status = error.response.status;
+          
+          // Handle duplicate report requests - extract the duplicate report ID
+          if (status === 425) {
+            const errorDetail = error.response.data?.detail || '';
+            const reportIdMatch = errorDetail.match(/duplicate of : ([a-f0-9-]+)/);
+            if (reportIdMatch) {
+              const duplicateReportId = reportIdMatch[1];
+              logger.info(`Report request is a duplicate of existing report: ${duplicateReportId}`);
+              logger.info(`Using existing report instead of creating a new one`);
+              return { reportId: duplicateReportId };
+            }
+            throw new Error(`Duplicate request detected: ${errorDetail}`);
+          }
+          
+          // Don't retry on these status codes
+          if ([400, 401, 403, 404].includes(status)) {
+            if (status === 404) {
+              throw new Error(`API endpoint not found: ${endpoint}. Please check if the API version is correct.`);
+            } else if (status === 401) {
+              throw new Error('Authentication failed. Please check your API credentials.');
+            } else if (status === 403) {
+              throw new Error('Access forbidden. Please check your API permissions and profile ID.');
+            }
+            throw error;
+          }
+          
+          // Retry on 429 (rate limit) and 5xx errors
+          if (status === 429 || status >= 500) {
+            if (attempt < maxRetries) {
+              const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000; // Exponential backoff with jitter
+              logger.warn(`API request failed with status ${status}, retrying in ${Math.round(delay)}ms...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+          }
+        }
+        
+        // Retry on network errors (socket hang up, timeout, etc.)
+        const isNetworkError = !error.response && (
+          error.code === 'ECONNRESET' ||
+          error.code === 'ETIMEDOUT' ||
+          error.code === 'ENOTFOUND' ||
+          error.message?.includes('socket hang up') ||
+          error.message?.includes('timeout')
+        );
+        
+        if (isNetworkError && attempt < maxRetries) {
+          const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000; // Exponential backoff with jitter
+          logger.warn(`Network error (${error.code || error.message}), retrying in ${Math.round(delay)}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        
+        // If we get here, either we've exhausted retries or it's a non-retryable error
+        logger.error(`API request failed: ${method} ${endpoint}`, {
+          error: error.response?.data || error.message,
+          status: error.response?.status,
+          url: `${this.config.endpoint}${endpoint}`,
+          attempts: attempt + 1
+        });
+        
+        throw error;
       }
-      
-      throw error;
     }
+    
+    // Should never reach here, but just in case
+    throw lastError;
   }
 
   /**

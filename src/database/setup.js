@@ -55,18 +55,82 @@ async function setupDatabase() {
       statements.push(currentStatement.trim());
     }
 
-    for (const statement of statements) {
-      if (statement.trim()) {
+    // Execute statements with better error handling
+    let successCount = 0;
+    let errorCount = 0;
+    const errors = [];
+
+    for (let i = 0; i < statements.length; i++) {
+      const statement = statements[i].trim();
+      if (!statement) continue;
+
+      try {
+        // Skip comments and empty statements
+        if (statement.startsWith('--') || statement.length === 0) {
+          continue;
+        }
+
         await db.query(statement);
+        successCount++;
+        
+        // Log progress for large schemas
+        if ((i + 1) % 10 === 0) {
+          logger.debug(`Executed ${i + 1}/${statements.length} statements...`);
+        }
+      } catch (error) {
+        errorCount++;
+        const errorMsg = error.message || String(error);
+        
+        // Check if it's a "already exists" error (non-critical)
+        const isNonCritical = 
+          errorMsg.includes('already exists') ||
+          errorMsg.includes('duplicate') ||
+          errorMsg.includes('relation') && errorMsg.includes('does not exist') && 
+          (statement.includes('CREATE INDEX') || statement.includes('CREATE TRIGGER'));
+        
+        if (isNonCritical) {
+          logger.debug(`Skipping non-critical error: ${errorMsg.substring(0, 100)}`);
+          successCount++; // Count as success since it's expected
+        } else {
+          // Critical error - log and collect
+          logger.warn(`Statement ${i + 1} failed: ${errorMsg.substring(0, 200)}`);
+          errors.push({
+            statement: statement.substring(0, 100) + (statement.length > 100 ? '...' : ''),
+            error: errorMsg
+          });
+        }
       }
     }
 
-    logger.info('Database setup completed successfully');
-    console.log('✓ Database setup completed successfully');
+    if (errors.length > 0) {
+      logger.warn(`Database setup completed with ${errors.length} critical error(s)`);
+      console.warn(`⚠ Database setup completed with ${errors.length} critical error(s):`);
+      errors.forEach((err, idx) => {
+        console.warn(`  ${idx + 1}. ${err.error}`);
+      });
+    } else {
+      logger.info(`Database setup completed successfully (${successCount} statements executed)`);
+      console.log(`✓ Database setup completed successfully (${successCount} statements executed)`);
+    }
     
   } catch (error) {
     logger.error('Database setup failed:', error);
     console.error('✗ Database setup failed:', error.message);
+    
+    // Provide helpful error messages for common issues
+    if (error.message && error.message.includes('self-signed certificate')) {
+      console.error('\n💡 SSL Certificate Error:');
+      console.error('   Set DB_SSL_CA_FILE or DB_SSL_CA in your .env file');
+      console.error('   Or set DB_SSL_REJECT_UNAUTHORIZED=false for local development');
+    } else if (error.message && error.message.includes('password authentication')) {
+      console.error('\n💡 Authentication Error:');
+      console.error('   Check your DB_USER and DB_PASSWORD in .env file');
+    } else if (error.message && error.message.includes('does not exist')) {
+      console.error('\n💡 Database Error:');
+      console.error('   The database may not exist. Create it first:');
+      console.error('   createdb -U postgres amazon_ads');
+    }
+    
     throw error;
   } finally {
     await db.close();

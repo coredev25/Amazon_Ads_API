@@ -27,6 +27,7 @@ class Recommendation:
     rules_triggered: List[str]
     metadata: Dict[str, Any]
     created_at: datetime
+    strategy_id: Optional[str] = None
 
 
 class RecommendationEngine:

@@ -3,7 +3,7 @@ Configuration module for AI Rule Engine
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
 import json
 
@@ -20,16 +20,16 @@ class RuleConfig:
     acos_high_threshold: float = 0.40  # High ACOS threshold (40%+) - reduce bids aggressively
     acos_medium_high_threshold: float = 0.35  # Medium-high ACOS (35-40%) - reduce bids moderately
     acos_low_threshold: float = 0.25  # Low ACOS threshold (<25%) - can increase bids
-    # Granular ACOS Tiers (discrete tier logic)
-    acos_tier_very_high: float = 0.50  # 50%+ - aggressive reduction
-    acos_tier_high: float = 0.40  # 40-50% - strong reduction
-    acos_tier_medium_high: float = 0.35  # 35-40% - moderate reduction
-    acos_tier_medium: float = 0.30  # 30-35% - slight reduction
-    acos_tier_target: float = 0.09  # Target ACOS (9%)
-    acos_tier_good: float = 0.25  # 25-30% - maintain
-    acos_tier_low: float = 0.20  # 20-25% - slight increase
-    acos_tier_very_low: float = 0.15  # 15-20% - moderate increase
-    acos_tier_excellent: float = 0.10  # <15% - strong increase
+    # Granular ACOS Tiers (stored as % of target ACOS; 1.0 == 100% of target)
+    acos_tier_very_high: float = 2.0  # 200%+ of target (Critical)
+    acos_tier_high: float = 1.35  # 135-200% of target (Severe Overspend lower bound)
+    acos_tier_medium_high: float = 1.20  # 120-135% of target (Moderately High)
+    acos_tier_medium: float = 1.19  # Upper bound for 100-119% of target (Slightly Above Target)
+    acos_tier_target: float = 1.0  # Target ACOS (100% of target)
+    acos_tier_good: float = 0.85  # 70-85% of target (Optimal upper band)
+    acos_tier_low: float = 0.70  # 70% of target (Optimal lower band)
+    acos_tier_very_low: float = 0.45  # 45% of target (Ultra Profitable upper band)
+    acos_tier_excellent: float = 0.30  # 30% of target (Ultra Profitable floor)
     
     # ROAS Rule Configuration  
     roas_target: float = 11.11  # Target ROAS (11.11:1)
@@ -127,6 +127,9 @@ class RuleConfig:
     re_evaluation_interval_days: int = 60  # Days between re-evaluations
     min_conversion_probability: float = 0.2  # Minimum conversion probability threshold
     product_price_tier: str = 'mid'  # Product price tier: 'low', 'mid', 'premium'
+    # Bid cap overrides (per product/category)
+    product_bid_caps: Dict[str, float] = field(default_factory=dict)
+    category_bid_caps: Dict[str, float] = field(default_factory=dict)
     
     # Bid Optimization Weights
     weight_performance: float = 0.40  # Weight for performance metrics
@@ -147,6 +150,14 @@ class RuleConfig:
     safeguard_bid_reduction_factor: float = 0.5  # Reduce bid by 50% when safeguard triggers
     min_spend_for_safeguard: float = 10.0  # Minimum spend required to trigger safeguard ($10)
     min_clicks_for_safeguard: int = 10  # Minimum clicks required to trigger safeguard
+    # Comprehensive Safety Veto Configuration (#19)
+    enable_comprehensive_safety_veto: bool = True  # Enable comprehensive safety-first veto layer
+    spend_spike_veto_threshold: float = 2.0  # 200% spend increase in last 3 days triggers veto
+    spend_spike_veto_lookback_days: int = 3  # Days to check for spend spike
+    spend_spike_veto_conversion_check: bool = True  # Check if conversions unchanged during spike
+    account_daily_limit: float = 10000.0  # Maximum daily account spend limit ($10,000)
+    account_daily_limit_action: str = 'pause'  # 'pause', 'reduce_bid', 'alert'
+    account_daily_limit_reduction_factor: float = 0.5  # Reduce bids by 50% if limit exceeded
     
     # Order-Based Scaling Configuration
     enable_order_based_scaling: bool = True  # Enable conversion count tier logic
@@ -203,12 +214,66 @@ class RuleConfig:
     learning_failure_threshold: float = -0.05  # -5% decline = failure
     learning_evaluation_days: int = 7  # Days to evaluate outcomes
     min_training_samples: int = 100  # Minimum samples for ML training
+    min_spend_for_label: float = 5.0  # Minimum spend to keep label
+    min_clicks_for_label: int = 5  # Minimum clicks to keep label
+    learning_policy_holdout_pct: float = 0.1  # 10% traffic in control/holdout
+    enable_probability_calibration: bool = True  # Use calibrated probabilities for ML
+    
+    # Comprehensive Safety Veto Configuration (#19)
+    enable_comprehensive_safety_veto: bool = True
+    spend_spike_veto_threshold: float = 2.0  # 200% spend increase triggers veto
+    spend_spike_veto_lookback_days: int = 3  # Days to check for spend spike
+    spend_spike_veto_conversion_check: bool = True  # Check if conversions unchanged
+    account_daily_limit: float = 10000.0  # Maximum daily account spend ($10,000)
+    account_daily_limit_action: str = 'pause'  # 'pause', 'reduce_bid', 'alert'
+    account_daily_limit_reduction_factor: float = 0.5  # Reduce bids by 50% if limit exceeded
+    
+    # Model Retraining Validation Thresholds (#16)
+    min_test_auc_improvement: float = 0.02  # 2% improvement required
+    min_test_accuracy_improvement: float = 0.01  # 1% improvement required
+    min_test_auc: float = 0.60  # Minimum AUC to promote
+    min_test_accuracy: float = 0.55  # Minimum accuracy to promote
+    max_model_versions: int = 5  # Maximum model versions to keep for rollback
+    
+    # Hierarchical Model Configuration (#18)
+    enable_hierarchical_models: bool = False  # Enable cross-ASIN transfer learning
+    
+    # Advanced Models Configuration (#26)
+    enable_time_series_models: bool = False  # Enable LSTM/RNN time-series models
+    time_series_sequence_length: int = 14  # Days of history for time-series input
+    use_gpu: bool = False  # Use GPU for time-series models if available
+    enable_causal_inference: bool = False  # Enable causal inference models
+    
+    # Multi-Armed Bandits Configuration (#27)
+    enable_multi_armed_bandits: bool = False  # Enable MAB for exploration vs exploitation
+    bandit_algorithm: str = 'thompson_sampling'  # 'thompson_sampling' or 'ucb'
+    bandit_alpha_prior: float = 1.0  # Beta prior alpha for Thompson Sampling
+    bandit_beta_prior: float = 1.0  # Beta prior beta for Thompson Sampling
+    ucb_exploration_constant: float = 2.0  # Exploration constant for UCB
+    enable_counterfactual_evaluation: bool = False  # Enable counterfactual evaluation
+    
+    # Portfolio Learning Configuration (#28)
+    enable_portfolio_learning: bool = False  # Enable cross-account learning
+    enable_differential_privacy: bool = True  # Enable differential privacy for portfolio data
+    differential_privacy_epsilon: float = 1.0  # Privacy budget (epsilon)
+    min_accounts_for_pooling: int = 3  # Minimum accounts required for pooling
+    privacy_salt: str = 'default_salt_change_in_production'  # Salt for anonymization
+    
+    # Explainability Configuration (#29)
+    enable_explainability: bool = False  # Enable SHAP-based explainability
+    explainability_top_k_features: int = 5  # Number of top features to show in explanations
+    
+    # Simulator Configuration (#30)
+    enable_simulator: bool = False  # Enable historical simulation sandbox
+    simulation_lookback_days: int = 30  # Days to look back for simulation
     
     # Engine Feature Flags
     enable_intelligence_engines: bool = True
     enable_learning_loop: bool = True
     enable_advanced_bid_optimization: bool = True
     enable_profit_optimization: bool = True
+    enable_telemetry: bool = True
+    telemetry_exporter: str = 'prometheus'  # prometheus|statsd|noop
     
     @classmethod
     def from_file(cls, config_path: str) -> 'RuleConfig':

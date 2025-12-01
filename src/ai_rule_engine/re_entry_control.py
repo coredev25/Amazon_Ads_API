@@ -7,7 +7,7 @@ ensure stable, data-driven bid adjustments.
 
 import logging
 from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass
 
 
@@ -77,7 +77,8 @@ class ReEntryController:
                           last_change_date: Optional[datetime],
                           last_bid: Optional[float],
                           acos_history: List[Dict[str, Any]],
-                          bid_change_history: List[Dict[str, Any]]) -> ReEntryControlResult:
+                          bid_change_history: List[Dict[str, Any]],
+                          db_connector=None) -> ReEntryControlResult:
         """
         Determine if a bid adjustment should be allowed
         
@@ -101,7 +102,25 @@ class ReEntryController:
             'proposed_bid': proposed_bid
         }
         
-        # Check 1: Cooldown period
+        # FIX #5: Check DB for bid lock first (persistent cooldown)
+        if db_connector and hasattr(db_connector, 'check_bid_lock'):
+            try:
+                bid_lock = db_connector.check_bid_lock(entity_type, entity_id)
+                if bid_lock:
+                    locked_until = bid_lock.get('locked_until')
+                    if locked_until and locked_until > datetime.now():
+                        days_until = (locked_until - datetime.now()).days
+                        return ReEntryControlResult(
+                            allowed=False,
+                            reason=f"Bid locked in DB until {locked_until.strftime('%Y-%m-%d')} ({bid_lock.get('lock_reason', 'cooldown')})",
+                            metadata=metadata,
+                            days_until_eligible=days_until,
+                            last_change_date=last_change_date
+                        )
+            except Exception as e:
+                self.logger.warning(f"Error checking DB bid lock: {e}")
+        
+        # Check 1: Cooldown period (fallback to in-memory if DB check unavailable)
         if last_change_date:
             days_since_change = (datetime.now() - last_change_date).days
             metadata['days_since_last_change'] = days_since_change
@@ -116,9 +135,11 @@ class ReEntryController:
                 )
         
         # Check 2: Minimum change threshold
+        # FIX #8: change_percentage is in decimal form (0.05 = 5%), min_change_threshold is also decimal
         change_percentage = abs((proposed_bid - current_bid) / current_bid) if current_bid > 0 else 0
         metadata['change_percentage'] = change_percentage
         
+        # FIX #8: Compare decimals to decimals (both are in 0-1 range, not percentages)
         if change_percentage < self.min_change_threshold:
             return ReEntryControlResult(
                 allowed=False,
@@ -183,7 +204,14 @@ class ReEntryController:
             Dictionary with stability information
         """
         # Get most recent values for stability window
-        recent_acos = [float(record.get('acos_value', 0)) for record in acos_history[:self.stability_window]]
+        # FIX #6: Handle NaNs and inf values
+        import math
+        recent_acos = []
+        for record in acos_history[:self.stability_window]:
+            acos_val = float(record.get('acos_value', 0))
+            # Skip NaN and inf values
+            if not (math.isnan(acos_val) or math.isinf(acos_val)):
+                recent_acos.append(acos_val)
         
         if len(recent_acos) < self.stability_window:
             return {
@@ -193,13 +221,21 @@ class ReEntryController:
                 'mean': None
             }
         
-        # Calculate variance
+        # Calculate variance (FIX #6: Handle edge cases)
         mean_acos = sum(recent_acos) / len(recent_acos)
+        if math.isnan(mean_acos) or mean_acos <= 0:
+            return {
+                'is_stable': False,
+                'reason': 'Invalid mean ACOS',
+                'variance': None,
+                'mean': mean_acos
+            }
+        
         variance = sum((x - mean_acos) ** 2 for x in recent_acos) / len(recent_acos)
         std_dev = variance ** 0.5
         
         # Consider stable if std deviation is less than 20% of mean
-        is_stable = (std_dev / mean_acos) < 0.20 if mean_acos > 0 else False
+        is_stable = (std_dev / mean_acos) < 0.20 if mean_acos > 0 and not math.isnan(std_dev) else False
         
         return {
             'is_stable': is_stable,
@@ -224,8 +260,19 @@ class ReEntryController:
             return 0.0
         
         # Split into recent (last 7 days) and older (previous 7 days)
-        recent_values = [float(record.get('acos_value', 0)) for record in acos_history[:7]]
-        older_values = [float(record.get('acos_value', 0)) for record in acos_history[7:14]]
+        # FIX #6: Handle NaNs and inf values
+        import math
+        recent_values = []
+        for record in acos_history[:7]:
+            acos_val = float(record.get('acos_value', 0))
+            if not (math.isnan(acos_val) or (math.isinf(acos_val) and acos_val > 0)):
+                recent_values.append(acos_val)
+        
+        older_values = []
+        for record in acos_history[7:14]:
+            acos_val = float(record.get('acos_value', 0))
+            if not (math.isnan(acos_val) or (math.isinf(acos_val) and acos_val > 0)):
+                older_values.append(acos_val)
         
         if not recent_values:
             return 0.0
@@ -240,7 +287,8 @@ class ReEntryController:
             # Only recent data available
             smoothed_acos = avg_recent
         
-        return smoothed_acos
+        # FIX #6: Ensure no NaN in return
+        return smoothed_acos if not math.isnan(smoothed_acos) else 0.0
     
     def _check_hysteresis_bands(self, smoothed_acos: float) -> Dict[str, Any]:
         """

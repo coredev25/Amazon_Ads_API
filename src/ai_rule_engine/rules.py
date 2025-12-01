@@ -3,10 +3,9 @@ Rule implementations for AI Rule Engine
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import logging
-from datetime import datetime, timedelta
 
 
 @dataclass

@@ -174,7 +174,6 @@ class SmartNegativeKeywordManager:
         
         keyword_text = keyword_data.get('keyword_text', '').lower()
         keyword_id = keyword_data.get('id', 0)
-        match_type = keyword_data.get('match_type', 'UNKNOWN')
         
         # Check decision cooldown
         if last_decision_date:

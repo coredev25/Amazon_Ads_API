@@ -146,18 +146,32 @@ class EvaluationPipeline:
         # Get performance data for this period
         # Note: This requires a method to get performance data by date range
         # For now, we'll use a simplified approach
-        try:
-            # This would need to be implemented in DatabaseConnector
-            # For now, return None and log a warning
-            self.logger.warning(
-                f"Performance data retrieval by date range not yet implemented. "
-                f"Using placeholder for {entity_type} {entity_id}"
-            )
-            # TODO: Implement actual performance data retrieval
+        if not self.db or not hasattr(self.db, 'get_entity_performance_range'):
+            self.logger.warning("Database connector missing get_entity_performance_range")
             return None
-        except Exception as e:
-            self.logger.error(f"Error getting performance_after: {e}")
+        
+        records = self.db.get_entity_performance_range(entity_type, entity_id, start_date, end_date)
+        if not records:
             return None
+        
+        total_cost = sum(float(r.get('cost', 0)) for r in records)
+        total_sales = sum(float(r.get('attributed_sales_7d', 0)) for r in records)
+        total_impressions = sum(float(r.get('impressions', 0)) for r in records)
+        total_clicks = sum(float(r.get('clicks', 0)) for r in records)
+        total_conversions = sum(int(r.get('attributed_conversions_7d', 0)) for r in records)
+        
+        after_metrics = {
+            'acos': (total_cost / total_sales) if total_sales > 0 else float('inf'),
+            'roas': (total_sales / total_cost) if total_cost > 0 else 0,
+            'ctr': (total_clicks / total_impressions * 100) if total_impressions > 0 else 0,
+            'spend': total_cost,
+            'sales': total_sales,
+            'conversions': total_conversions,
+            'impressions': total_impressions,
+            'clicks': total_clicks
+        }
+        
+        return after_metrics
     
     def should_retrain(self, previous_count: int, current_count: int) -> bool:
         """
@@ -227,6 +241,9 @@ class EvaluationPipeline:
             'retraining': retrain_results,
             'total_outcomes': current_count
         }
+
+
+
 
 
 
