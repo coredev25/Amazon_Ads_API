@@ -211,6 +211,8 @@ class AIRuleEngine:
                 self.logger.error(f"Error running intelligence engines for {entity_type} {entity_id}: {e}")
         
         # Use advanced bid optimization if enabled
+        # FIX: Prevent "Double Dip" - Only run AI optimizer OR traditional rules, not both
+        ai_recommendation = None
         if self.bid_optimizer and entity_type in ['keyword', 'ad_group']:
             try:
                 bid_optimization = self.bid_optimizer.calculate_optimal_bid(
@@ -246,7 +248,7 @@ class AIRuleEngine:
                             self.logger.error(f"Error logging bid change: {e}")
                     
                     # Convert to Recommendation format
-                    recommendation = Recommendation(
+                    ai_recommendation = Recommendation(
                         entity_type=bid_optimization.entity_type,
                         entity_id=bid_optimization.entity_id,
                         entity_name=bid_optimization.entity_name,
@@ -271,16 +273,18 @@ class AIRuleEngine:
                     if self.learning_loop:
                         try:
                             self.learning_loop.track_recommendation(
-                                recommendation.__dict__, entity_id, entity_type
+                                ai_recommendation.__dict__, entity_id, entity_type
                             )
                         except Exception as e:
                             self.logger.error(f"Error tracking recommendation: {e}")
-                    
-                    return [recommendation]
             except Exception as e:
                 self.logger.error(f"Error in bid optimization for {entity_type} {entity_id}: {e}")
         
-        # Fall back to traditional rules
+        # If AI optimizer returned a recommendation, return it (prevent double dip)
+        if ai_recommendation:
+            return [ai_recommendation]
+        
+        # Fall back to traditional rules ONLY if AI optimizer didn't run or didn't return a recommendation
         rule_results = []
         for rule_name, rule in self.rules.items():
             try:
