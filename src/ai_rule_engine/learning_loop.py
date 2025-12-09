@@ -872,7 +872,7 @@ class ModelTrainer:
                                    entity_type: str,
                                    intelligence_signals: Optional[Dict[str, Any]] = None,
                                    cluster_features: Optional[Dict[str, Any]] = None,
-                                   performance_history: Optional[List[Dict[str, Any]]] = None) -> Tuple[float, Optional[Dict[str, Any]]]:
+                                   performance_history: Optional[List[Dict[str, Any]]] = None) -> Tuple[Optional[float], Optional[Dict[str, Any]]]:
         """
         STEP 5: Predict probability of success for a proposed adjustment
         
@@ -885,9 +885,29 @@ class ModelTrainer:
             performance_history: Optional historical performance for time-series models
             
         Returns:
-            Tuple of (probability of success (0.0 to 1.0), explanation dict or None)
+            Tuple of (probability of success (0.0 to 1.0) or None for warm-up mode, explanation dict or None)
+            Returns None for probability when in warm-up mode (insufficient training data)
         """
         explanation = None
+        
+        # COLD START FIX: Check if we have enough training samples
+        warm_up_threshold = self.config.get('warm_up_mode_threshold', 100)
+        enable_warm_up = self.config.get('enable_warm_up_mode', True)
+        
+        if enable_warm_up and self.db and hasattr(self.db, 'get_total_training_samples'):
+            try:
+                total_samples = self.db.get_total_training_samples()
+                if total_samples < warm_up_threshold:
+                    if self.logger:
+                        self.logger.info(
+                            f"Warm-up mode: Skipping AI prediction (samples: {total_samples} < {warm_up_threshold}). "
+                            f"Using math-based ACOS tiers instead."
+                        )
+                    # Return None to signal warm-up mode - caller should use math-based ACOS tiers
+                    return None, {'warm_up_mode': True, 'total_samples': total_samples, 'threshold': warm_up_threshold}
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"Error checking training samples count: {e}, proceeding with prediction")
         
         # FIX #26: Try time-series model first if available
         if self.time_series_trainer and performance_history and len(performance_history) >= self.time_series_trainer.sequence_length:

@@ -219,6 +219,10 @@ class RuleConfig:
     learning_policy_holdout_pct: float = 0.1  # 10% traffic in control/holdout
     enable_probability_calibration: bool = True  # Use calibrated probabilities for ML
     
+    # Warm-Up Mode Configuration (Cold Start Fix)
+    warm_up_mode_threshold: int = 100  # Skip AI prediction if training samples < this threshold
+    enable_warm_up_mode: bool = True  # Enable warm-up mode to use math-based ACOS tiers when insufficient training data
+    
     # Comprehensive Safety Veto Configuration (#19)
     enable_comprehensive_safety_veto: bool = True
     spend_spike_veto_threshold: float = 2.0  # 200% spend increase triggers veto
@@ -441,6 +445,8 @@ class RuleConfig:
             'learning_failure_threshold': self.learning_failure_threshold,
             'learning_evaluation_days': self.learning_evaluation_days,
             'min_training_samples': self.min_training_samples,
+            'warm_up_mode_threshold': self.warm_up_mode_threshold,
+            'enable_warm_up_mode': self.enable_warm_up_mode,
             # Feature Flags
             'enable_intelligence_engines': self.enable_intelligence_engines,
             'enable_learning_loop': self.enable_learning_loop,

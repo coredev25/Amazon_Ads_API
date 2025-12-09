@@ -688,29 +688,39 @@ class BidOptimizationEngine:
                     prob_success = prediction_result
                     ml_explanation = None
                 
-                # FIX #3: Apply predictive gating with thresholds from checklist
-                # Use thresholds: <0.45 skip, 0.45-0.6 reduce 50%, 0.6-0.75 reduce 20%, else full
-                if prob_success < 0.45:
+                # COLD START FIX: Handle warm-up mode (insufficient training data)
+                if prob_success is None:
+                    # Warm-up mode: Skip AI prediction gating, use math-based ACOS tiers only
                     self.logger.info(
-                        f"Skipping bid adjustment for {entity_type} {entity_id}: "
-                        f"low success probability ({prob_success:.2%} < 0.45)"
+                        f"Warm-up mode active for {entity_type} {entity_id}: "
+                        f"Using math-based ACOS tiers (insufficient training data). "
+                        f"Proceeding with calculated adjustment: {total_adjustment:.1%}"
                     )
-                    return None
-                elif 0.45 <= prob_success < 0.6:
-                    # Reduce adjustment by 50%
-                    total_adjustment = total_adjustment * 0.5
-                    self.logger.info(
-                        f"Reducing adjustment 50% for {entity_type} {entity_id}: "
-                        f"moderate success probability ({prob_success:.2%})"
-                    )
-                elif 0.6 <= prob_success < 0.75:
-                    # Reduce adjustment by 20%
-                    total_adjustment = total_adjustment * 0.8
-                    self.logger.info(
-                        f"Reducing adjustment 20% for {entity_type} {entity_id}: "
-                        f"good success probability ({prob_success:.2%})"
-                    )
-                # else: prob_success >= 0.75, apply full adjustment
+                    # Continue with the math-based adjustment without AI gating
+                else:
+                    # FIX #3: Apply predictive gating with thresholds from checklist
+                    # Use thresholds: <0.45 skip, 0.45-0.6 reduce 50%, 0.6-0.75 reduce 20%, else full
+                    if prob_success < 0.45:
+                        self.logger.info(
+                            f"Skipping bid adjustment for {entity_type} {entity_id}: "
+                            f"low success probability ({prob_success:.2%} < 0.45)"
+                        )
+                        return None
+                    elif 0.45 <= prob_success < 0.6:
+                        # Reduce adjustment by 50%
+                        total_adjustment = total_adjustment * 0.5
+                        self.logger.info(
+                            f"Reducing adjustment 50% for {entity_type} {entity_id}: "
+                            f"moderate success probability ({prob_success:.2%})"
+                        )
+                    elif 0.6 <= prob_success < 0.75:
+                        # Reduce adjustment by 20%
+                        total_adjustment = total_adjustment * 0.8
+                        self.logger.info(
+                            f"Reducing adjustment 20% for {entity_type} {entity_id}: "
+                            f"good success probability ({prob_success:.2%})"
+                        )
+                    # else: prob_success >= 0.75, apply full adjustment
                 
             except Exception as e:
                 self.logger.warning(f"Error in success probability prediction: {e}")

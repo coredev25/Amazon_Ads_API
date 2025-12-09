@@ -125,7 +125,28 @@ class SmartNegativeKeywordManager:
         )
     
     def _load_waste_patterns(self, config: Dict[str, Any]) -> Dict[str, List[str]]:
-        """Load waste patterns with severity levels"""
+        """
+        Load waste patterns with severity levels from database
+        
+        Falls back to hardcoded patterns if database is unavailable or empty
+        """
+        # Try to load from database first
+        db_connector = config.get('db_connector')
+        if db_connector and hasattr(db_connector, 'get_waste_patterns'):
+            try:
+                patterns = db_connector.get_waste_patterns()
+                # Check if we got any patterns
+                total_patterns = sum(len(p) for p in patterns.values())
+                if total_patterns > 0:
+                    self.logger.info(f"Loaded {total_patterns} waste patterns from database")
+                    return patterns
+                else:
+                    self.logger.warning("No waste patterns found in database, using fallback patterns")
+            except Exception as e:
+                self.logger.warning(f"Error loading waste patterns from database: {e}, using fallback patterns")
+        
+        # Fallback to hardcoded patterns if database unavailable
+        self.logger.info("Using fallback hardcoded waste patterns")
         return {
             'critical': [  # Always negative regardless of context
                 r'\b(job|jobs|career|hiring|employment|recruiter)\b',

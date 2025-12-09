@@ -54,7 +54,10 @@ class AIRuleEngine:
             self.intelligence_orchestrator = None
         
         # Initialize negative keyword manager
-        self.negative_manager = NegativeKeywordManager(config.__dict__)
+        # Pass db_connector in config so waste patterns can be loaded from database
+        negative_config = config.__dict__.copy()
+        negative_config['db_connector'] = db_connector
+        self.negative_manager = NegativeKeywordManager(negative_config)
         
         # Initialize learning loop (if enabled) - must be before bid optimizer
         if config.enable_learning_loop:

@@ -471,3 +471,49 @@ CREATE INDEX IF NOT EXISTS idx_learning_outcomes_strategy ON learning_outcomes(s
 CREATE INDEX IF NOT EXISTS idx_bid_constraints_key ON bid_constraints(constraint_type, constraint_key);
 CREATE INDEX IF NOT EXISTS idx_model_training_runs_status ON model_training_runs(status);
 
+-- ============================================================================
+-- WASTE PATTERNS TABLE (Negative Keyword Manager)
+-- ============================================================================
+
+-- Table for storing waste patterns (moved from hardcoded Python to database)
+CREATE TABLE IF NOT EXISTS waste_patterns (
+    id SERIAL PRIMARY KEY,
+    pattern_text TEXT NOT NULL,
+    severity VARCHAR(50) NOT NULL, -- 'critical', 'high', 'medium', 'contextual'
+    is_regex BOOLEAN DEFAULT TRUE, -- Whether pattern_text is a regex pattern
+    is_active BOOLEAN DEFAULT TRUE,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(pattern_text, severity)
+);
+
+-- Create index for faster lookups
+CREATE INDEX IF NOT EXISTS idx_waste_patterns_severity ON waste_patterns(severity);
+CREATE INDEX IF NOT EXISTS idx_waste_patterns_active ON waste_patterns(is_active);
+
+-- Insert default waste patterns (migrated from negative_manager.py)
+INSERT INTO waste_patterns (pattern_text, severity, description) VALUES
+-- Critical: Always negative regardless of context
+('\b(job|jobs|career|hiring|employment|recruiter)\b', 'critical', 'Job-related terms'),
+('\b(porn|sex|adult|xxx)\b', 'critical', 'Adult content'),
+('\b(illegal|scam|fake|counterfeit)\b', 'critical', 'Illegal/scam terms'),
+-- High: Usually negative but consider context
+('\b(repair|fix|broken|damaged)\b', 'high', 'Repair-related terms'),
+('\b(used|refurbished|secondhand|pre-owned)\b', 'high', 'Used product terms'),
+('\b(review|reviews|complaint|complaints|lawsuit)\b', 'high', 'Review/complaint terms'),
+-- Medium: Context-dependent
+('\b(diy|how to|tutorial|instructions|guide)\b', 'medium', 'DIY/tutorial terms'),
+('\b(free|freebie)\b', 'medium', 'Free product terms'),
+('\b(for kids|for children|toy|toys)\b', 'medium', 'Children-related terms'),
+-- Contextual: Depends on price tier
+('\b(cheap|cheapest|budget|affordable)\b', 'contextual', 'Budget/cheap terms'),
+('\b(luxury|premium|expensive|high-end)\b', 'contextual', 'Luxury/premium terms'),
+('\b(discount|sale|clearance|deal)\b', 'contextual', 'Discount/sale terms')
+ON CONFLICT (pattern_text, severity) DO NOTHING;
+
+-- Apply trigger for updated_at
+DROP TRIGGER IF EXISTS update_waste_patterns_updated_at ON waste_patterns;
+CREATE TRIGGER update_waste_patterns_updated_at BEFORE UPDATE ON waste_patterns
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+

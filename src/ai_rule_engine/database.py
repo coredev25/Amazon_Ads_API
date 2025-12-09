@@ -1027,6 +1027,64 @@ class DatabaseConnector:
             self.logger.error(f"Error fetching bid changes for evaluation: {e}")
             return []
     
+    def get_total_training_samples(self) -> int:
+        """
+        Get total count of training samples from learning_outcomes table
+        
+        Returns:
+            Total number of training samples
+        """
+        query = """
+        SELECT COUNT(*) as total
+        FROM learning_outcomes
+        """
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query)
+                    result = cursor.fetchone()
+                    return result['total'] if result else 0
+        except Exception as e:
+            self.logger.error(f"Error counting training samples: {e}")
+            return 0
+    
+    def get_waste_patterns(self) -> Dict[str, List[str]]:
+        """
+        Get waste patterns from database grouped by severity
+        
+        Returns:
+            Dictionary mapping severity levels to lists of pattern strings
+        """
+        query = """
+        SELECT pattern_text, severity
+        FROM waste_patterns
+        WHERE is_active = TRUE
+        ORDER BY severity, id
+        """
+        
+        patterns = {
+            'critical': [],
+            'high': [],
+            'medium': [],
+            'contextual': []
+        }
+        
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query)
+                    for row in cursor.fetchall():
+                        severity = row['severity']
+                        pattern = row['pattern_text']
+                        if severity in patterns:
+                            patterns[severity].append(pattern)
+            return patterns
+        except Exception as e:
+            self.logger.error(f"Error loading waste patterns from database: {e}")
+            # Return empty patterns if database query fails
+            return patterns
+    
     def update_bid_change_outcome(self, change_id: int, outcome_score: float,
                                  outcome_label: str, performance_after: Dict[str, float]) -> bool:
         """

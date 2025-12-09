@@ -551,12 +551,21 @@ class DataSyncService {
       logger.info('\n📊 PHASE 2: Syncing Performance Data');
       logger.info('───────────────────────────────────────────────────────');
       
+      // TIMEZONE FIX: Always start from Yesterday (T-1) to ensure complete data
+      // Amazon Ads data resets at midnight in marketplace timezone (PST/GMT)
+      // Processing Yesterday ensures data is fully attributed and closed
       const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1); // Start from Yesterday (T-1)
+      
+      logger.info(`📅 Processing data starting from Yesterday (${yesterday.toISOString().split('T')[0]}) to ensure complete attribution`);
+      
       const performancePromises = [];
       
       // Process each day sequentially to avoid overwhelming the API
+      // Start from Yesterday and go back N days
       for (let i = 0; i < daysBack; i++) {
-        const date = new Date(today);
+        const date = new Date(yesterday);
         date.setDate(date.getDate() - i);
         // Amazon Ads API expects date in YYYYMMDD format (e.g., 20241020)
         const reportDate = date.toISOString().split('T')[0].replace(/-/g, '');
