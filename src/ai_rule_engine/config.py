@@ -243,7 +243,9 @@ class RuleConfig:
     enable_hierarchical_models: bool = False  # Enable cross-ASIN transfer learning
     
     # Advanced Models Configuration (#26)
-    enable_time_series_models: bool = False  # Enable LSTM/RNN time-series models
+    # CRITICAL: LSTM models disabled due to time-series data gaps (missing days break sequence assumptions)
+    # Stick to Random Forest/Gradient Boosting models which are robust to missing days
+    enable_time_series_models: bool = False  # DISABLED: Enable LSTM/RNN time-series models
     time_series_sequence_length: int = 14  # Days of history for time-series input
     use_gpu: bool = False  # Use GPU for time-series models if available
     enable_causal_inference: bool = False  # Enable causal inference models

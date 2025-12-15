@@ -288,8 +288,19 @@ class AIRuleEngine:
             return [ai_recommendation]
         
         # Fall back to traditional rules ONLY if AI optimizer didn't run or didn't return a recommendation
+        # FIX: When BidOptimizationEngine is enabled, ONLY allow Basic Rules for Budget/Negative Keywords
+        # Prevent conflicting bid decisions by skipping ACOS/ROAS/CTR rules for bids
         rule_results = []
         for rule_name, rule in self.rules.items():
+            # Skip bid-related rules (ACOS, ROAS, CTR) when BidOptimizationEngine is enabled
+            if self.bid_optimizer and rule_name in ['acos', 'roas', 'ctr']:
+                self.logger.debug(
+                    f"Skipping basic rule '{rule_name}' for {entity_type} {entity_id}: "
+                    f"BidOptimizationEngine is enabled (prevents conflicting bid decisions)"
+                )
+                continue
+            
+            # Allow Budget and Negative Keyword rules to always run
             try:
                 result = rule.evaluate(performance_data, entity_data)
                 if result:
