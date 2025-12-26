@@ -127,7 +127,9 @@ export default function KeywordsPage() {
           <div className="flex items-center gap-2">
             <p className="font-medium text-gray-900 dark:text-white truncate">{row.keyword_text}</p>
             {row.is_locked && (
-              <Lock className="w-3 h-3 text-amber-400 flex-shrink-0" title={row.lock_reason || 'Locked'} />
+              <span title={row.lock_reason || 'Locked'}>
+                <Lock className="w-3 h-3 text-amber-400 flex-shrink-0" />
+              </span>
             )}
           </div>
           {row.is_locked && (
