@@ -19,10 +19,13 @@ class DatabaseConnector:
         Args:
             connection_string: PostgreSQL connection string (optional, will use env vars if not provided)
         """
+        self.logger = logging.getLogger(__name__)
+        
         if connection_string:
             self.connection_string = connection_string
+            self.connection_params = None
         else:
-            # Build connection string from individual environment variables
+            # Build connection parameters from individual environment variables
             import os
             db_host = os.getenv('DB_HOST', 'localhost')
             db_port = os.getenv('DB_PORT', '5432')
@@ -33,13 +36,32 @@ class DatabaseConnector:
             if not db_password:
                 raise ValueError("DB_PASSWORD environment variable is required")
             
-            self.connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-        
-        self.logger = logging.getLogger(__name__)
+            # Store connection parameters (psycopg2 format)
+            self.connection_params = {
+                'host': db_host,
+                'port': db_port,
+                'database': db_name,
+                'user': db_user,
+                'password': db_password
+            }
+            # Also store as key-value string for legacy compatibility
+            self.connection_string = f"host={db_host} port={db_port} dbname={db_name} user={db_user} password={db_password}"
     
     def get_connection(self):
         """Get database connection"""
-        return psycopg2.connect(self.connection_string)
+        try:
+            if self.connection_params:
+                # Use connection parameters (preferred method)
+                return psycopg2.connect(**self.connection_params)
+            else:
+                # Fall back to connection string
+                return psycopg2.connect(self.connection_string)
+        except psycopg2.Error as e:
+            self.logger.error(f"Database connection error: {e}")
+            self.logger.error(f"Connection details: host={self.connection_params.get('host') if self.connection_params else 'N/A'}, "
+                            f"port={self.connection_params.get('port') if self.connection_params else 'N/A'}, "
+                            f"database={self.connection_params.get('database') if self.connection_params else 'N/A'}")
+            raise
     
     def get_campaign_performance(self, campaign_id: int, days_back: int = 7) -> List[Dict[str, Any]]:
         """
@@ -216,7 +238,7 @@ class DatabaseConnector:
         FROM campaigns c
         LEFT JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id 
             AND cp.report_date >= %s
-        WHERE c.campaign_status = 'enabled'
+        WHERE c.campaign_status = 'ENABLED'
         GROUP BY c.campaign_id, c.campaign_name, c.campaign_status, c.budget_amount, c.budget_type
         ORDER BY total_cost DESC
         """
@@ -265,7 +287,7 @@ class DatabaseConnector:
         FROM ad_groups ag
         LEFT JOIN ad_group_performance agp ON ag.ad_group_id = agp.ad_group_id 
             AND agp.report_date >= %s
-        WHERE ag.campaign_id = %s AND ag.state = 'enabled'
+        WHERE ag.campaign_id = %s AND ag.state = 'ENABLED'
         GROUP BY ag.ad_group_id, ag.ad_group_name, ag.default_bid, ag.state
         HAVING SUM(agp.impressions) >= %s
         ORDER BY total_cost DESC
@@ -317,7 +339,7 @@ class DatabaseConnector:
         FROM keywords k
         LEFT JOIN keyword_performance kp ON k.keyword_id = kp.keyword_id 
             AND kp.report_date >= %s
-        WHERE k.ad_group_id = %s AND k.state = 'enabled'
+        WHERE k.ad_group_id = %s AND k.state = 'ENABLED'
         GROUP BY k.keyword_id, k.keyword_text, k.match_type, k.bid, k.state
         HAVING SUM(kp.impressions) >= %s
         ORDER BY total_cost DESC
@@ -882,18 +904,159 @@ class DatabaseConnector:
             %(strategy_id)s, %(policy_variant)s, %(timestamp)s, %(applied)s, %(metadata)s
         )
         ON CONFLICT (recommendation_id) DO UPDATE SET
-            applied = EXCLUDED.applied,
+            recommended_value = EXCLUDED.recommended_value,
+            current_value = EXCLUDED.current_value,
+            intelligence_signals = EXCLUDED.intelligence_signals,
+            metadata = EXCLUDED.metadata,
+            created_at = EXCLUDED.created_at,
+            applied = CASE WHEN recommendation_tracking.applied = TRUE THEN TRUE ELSE EXCLUDED.applied END,
             applied_at = CASE WHEN EXCLUDED.applied THEN CURRENT_TIMESTAMP ELSE recommendation_tracking.applied_at END
         """
         
         try:
+            # Ensure JSONB fields are properly formatted
+            import json as json_module
+            import time
+            import os
+            
+            # #region agent log
+            log_path = '/home/vip/Desktop/Amazon_Ads_API/.cursor/debug.log'
+            try:
+                log_dir = os.path.dirname(log_path)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+                log_entry = {
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'H5',
+                    'location': 'database.py:save_recommendation',
+                    'message': 'save_recommendation entry',
+                    'data': {'recommendation_id': tracking_data.get('recommendation_id'), 'has_intelligence_signals': 'intelligence_signals' in tracking_data, 'has_metadata': 'metadata' in tracking_data},
+                    'timestamp': int(time.time() * 1000)
+                }
+                with open(log_path, 'a') as f:
+                    f.write(json_module.dumps(log_entry) + '\n')
+                    f.flush()
+            except:
+                pass
+            # #endregion
+            
+            if tracking_data.get('intelligence_signals') is not None:
+                if isinstance(tracking_data['intelligence_signals'], str):
+                    try:
+                        tracking_data['intelligence_signals'] = json_module.loads(tracking_data['intelligence_signals'])
+                    except:
+                        pass
+            if tracking_data.get('metadata') is not None:
+                if isinstance(tracking_data['metadata'], str):
+                    try:
+                        tracking_data['metadata'] = json_module.loads(tracking_data['metadata'])
+                    except:
+                        pass
+                elif not isinstance(tracking_data['metadata'], dict):
+                    tracking_data['metadata'] = json_module.loads(json_module.dumps(tracking_data['metadata']))
+            
+            # #region agent log
+            try:
+                log_entry = {
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'H5',
+                    'location': 'database.py:save_recommendation',
+                    'message': 'Before DB connection',
+                    'data': {'recommendation_id': tracking_data.get('recommendation_id')},
+                    'timestamp': int(time.time() * 1000)
+                }
+                with open(log_path, 'a') as f:
+                    f.write(json_module.dumps(log_entry) + '\n')
+                    f.flush()
+            except:
+                pass
+            # #endregion
+            
             with self.get_connection() as conn:
+                # #region agent log
+                try:
+                    log_entry = {
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'H5',
+                        'location': 'database.py:save_recommendation',
+                        'message': 'DB connection established',
+                        'data': {'recommendation_id': tracking_data.get('recommendation_id')},
+                        'timestamp': int(time.time() * 1000)
+                    }
+                    with open(log_path, 'a') as f:
+                        f.write(json_module.dumps(log_entry) + '\n')
+                        f.flush()
+                except:
+                    pass
+                # #endregion
+                
                 with conn.cursor() as cursor:
+                    # #region agent log
+                    try:
+                        log_entry = {
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'H5',
+                            'location': 'database.py:save_recommendation',
+                            'message': 'Before execute',
+                            'data': {'recommendation_id': tracking_data.get('recommendation_id')},
+                            'timestamp': int(time.time() * 1000)
+                        }
+                        with open(log_path, 'a') as f:
+                            f.write(json_module.dumps(log_entry) + '\n')
+                            f.flush()
+                    except:
+                        pass
+                    # #endregion
+                    
                     cursor.execute(query, tracking_data)
                     conn.commit()
+                    
+                    # #region agent log
+                    try:
+                        log_entry = {
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'H5',
+                            'location': 'database.py:save_recommendation',
+                            'message': 'Save successful',
+                            'data': {'recommendation_id': tracking_data.get('recommendation_id')},
+                            'timestamp': int(time.time() * 1000)
+                        }
+                        with open(log_path, 'a') as f:
+                            f.write(json_module.dumps(log_entry) + '\n')
+                            f.flush()
+                    except:
+                        pass
+                    # #endregion
+                    
                     return True
         except Exception as e:
-            self.logger.error(f"Error saving recommendation: {e}")
+            self.logger.error(f"Error saving recommendation: {e}", exc_info=True)
+            # #region agent log
+            try:
+                import json as json_module
+                import time
+                import os
+                log_path = '/home/vip/Desktop/Amazon_Ads_API/.cursor/debug.log'
+                log_entry = {
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'H5',
+                    'location': 'database.py:save_recommendation',
+                    'message': 'Save exception',
+                    'data': {'recommendation_id': tracking_data.get('recommendation_id'), 'error': str(e)},
+                    'timestamp': int(time.time() * 1000)
+                }
+                with open(log_path, 'a') as f:
+                    f.write(json_module.dumps(log_entry) + '\n')
+                    f.flush()
+            except:
+                pass
+            # #endregion
             return False
     
     def get_tracked_recommendation(self, recommendation_id: str) -> Optional[Dict[str, Any]]:

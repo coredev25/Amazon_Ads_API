@@ -35,6 +35,7 @@ async function runSync() {
     console.log(`  - Campaigns synced: ${result.campaigns}`);
     console.log(`  - Ad Groups synced: ${result.adGroups}`);
     console.log(`  - Keywords synced: ${result.keywords}`);
+    console.log(`  - Product Ads synced: ${result.productAds || 0}`);
     console.log(`  - Performance records synced: ${result.performance}`);
     console.log(`  - Total records: ${Object.values(result).reduce((a, b) => a + b, 0)}\n`);
 

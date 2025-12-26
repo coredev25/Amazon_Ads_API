@@ -1,0 +1,24 @@
+# Dashboard API Requirements
+# Core Web Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Data Validation & Models
+pydantic>=2.12.0
+email-validator>=2.3.0  # Required for EmailStr in Pydantic v2
+
+# Database
+psycopg2-binary>=2.9.9
+
+# Configuration & Environment
+python-dotenv>=1.2.0
+
+# Authentication & Security
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0,<5.0.0  # Use bcrypt 4.x for better passlib compatibility
+PyJWT>=2.8.0,<3.0.0
+python-jose[cryptography]>=3.3.0
+
+# HTTP & API
+httpx>=0.26.0

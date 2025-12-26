@@ -30,27 +30,34 @@ except Exception:
     nn = None
 
 
-class TimeSeriesLSTM(nn.Module):
-    """
-    LSTM model for time-series prediction of bid success
-    """
-    
-    def __init__(self, input_size: int, hidden_size: int = 64, num_layers: int = 2, dropout: float = 0.2):
-        super(TimeSeriesLSTM, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
+# Only define PyTorch classes if torch is available
+if TORCH_AVAILABLE:
+    class TimeSeriesLSTM(nn.Module):
+        """
+        LSTM model for time-series prediction of bid success
+        """
         
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0)
-        self.fc = nn.Linear(hidden_size, 1)
-        self.sigmoid = nn.Sigmoid()
-    
-    def forward(self, x):
-        # x shape: (batch, seq_len, input_size)
-        lstm_out, _ = self.lstm(x)
-        # Take the last output
-        last_output = lstm_out[:, -1, :]
-        output = self.fc(last_output)
-        return self.sigmoid(output)
+        def __init__(self, input_size: int, hidden_size: int = 64, num_layers: int = 2, dropout: float = 0.2):
+            super(TimeSeriesLSTM, self).__init__()
+            self.hidden_size = hidden_size
+            self.num_layers = num_layers
+            
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0)
+            self.fc = nn.Linear(hidden_size, 1)
+            self.sigmoid = nn.Sigmoid()
+        
+        def forward(self, x):
+            # x shape: (batch, seq_len, input_size)
+            lstm_out, _ = self.lstm(x)
+            # Take the last output
+            last_output = lstm_out[:, -1, :]
+            output = self.fc(last_output)
+            return self.sigmoid(output)
+else:
+    # Dummy class when torch is not available
+    class TimeSeriesLSTM:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch is not installed. Install with: pip install torch")
 
 
 class TimeSeriesModelTrainer:

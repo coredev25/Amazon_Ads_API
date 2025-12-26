@@ -15,15 +15,61 @@ class DataSyncService {
   }
 
   /**
-   * Sync campaigns data
+   * Sync campaigns data using v3 API
+   * v3 API field names are different from v2:
+   * - state -> state (ENABLED, PAUSED, ARCHIVED) - stored as-is in uppercase
+   * - name -> name
+   * - budget -> budget.budget or dailyBudget
    */
   async syncCampaigns() {
     try {
-      logger.info('Syncing campaigns...');
+      logger.info('📋 Syncing campaigns from Amazon Ads API v3...');
       const campaigns = await this.client.getCampaigns();
 
+      if (!campaigns || campaigns.length === 0) {
+        logger.warn('⚠️  No campaigns returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${campaigns.length} campaigns, saving to database...`);
+
       let synced = 0;
+      let errors = 0;
+      
       for (const campaign of campaigns) {
+        try {
+        // v3 API response structure
+        // {
+        //   campaignId, name, state, targetingType, startDate, endDate,
+        //   budget: { budgetType, budget }, dynamicBidding, ...
+        // }
+          
+          // Validate required fields
+          if (!campaign.campaignId) {
+            logger.warn('Skipping campaign without campaignId:', campaign);
+            errors++;
+            continue;
+          }
+          
+          const campaignId = String(campaign.campaignId); // Ensure string for BIGINT
+          const campaignName = campaign.name || 'Unnamed Campaign';
+          const campaignState = (campaign.state || 'ENABLED').toUpperCase(); // ENABLED, PAUSED, ARCHIVED - store in uppercase
+          const targetingType = campaign.targetingType || 'MANUAL';
+        const startDate = campaign.startDate || null;
+        const endDate = campaign.endDate || null;
+          
+          // Handle budget - v3 API can return budget in different formats
+          let budgetAmount = null;
+          let budgetType = 'DAILY';
+          
+          if (campaign.budget) {
+            budgetAmount = campaign.budget.budget || campaign.budget.budgetAmount || null;
+            budgetType = campaign.budget.budgetType || campaign.budget.type || 'DAILY';
+          } else if (campaign.dailyBudget) {
+            budgetAmount = campaign.dailyBudget;
+            budgetType = 'DAILY';
+          }
+
         await db.query(
           `INSERT INTO campaigns (
             campaign_id, campaign_name, campaign_status, 
@@ -41,50 +87,90 @@ class DataSyncService {
             budget_type = $8,
             updated_at = CURRENT_TIMESTAMP`,
           [
-            campaign.campaignId,
-            campaign.name,
-            campaign.state,
-            campaign.targetingType,
-            campaign.startDate,
-            campaign.endDate,
-            campaign.budget?.amount,
-            campaign.budget?.type
+            campaignId,
+            campaignName,
+            campaignState,
+            targetingType,
+            startDate,
+            endDate,
+            budgetAmount,
+            budgetType
           ]
         );
         synced++;
+        
+        // Log progress every 50 campaigns
+        if (synced % 50 === 0) {
+          logger.info(`📋 Campaigns progress: ${synced}/${campaigns.length}`);
+          }
+        } catch (error) {
+          logger.error(`Error syncing campaign ${campaign.campaignId}:`, error.message);
+          errors++;
+        }
       }
 
-      logger.info(`Synced ${synced} campaigns`);
+      logger.info(`✅ Synced ${synced} campaigns${errors > 0 ? `, ${errors} errors` : ''}`);
       return synced;
     } catch (error) {
-      logger.error('Error syncing campaigns:', error);
+      logger.error('❌ Error syncing campaigns:', error.message);
       throw error;
     }
   }
 
   /**
-   * Sync ad groups data
+   * Sync ad groups data using v3 API
+   * v3 API response structure:
+   * { adGroupId, name, campaignId, defaultBid, state }
    */
   async syncAdGroups() {
     try {
-      logger.info('Syncing ad groups...');
+      logger.info('📋 Syncing ad groups from Amazon Ads API v3...');
       const adGroups = await this.client.getAdGroups();
+
+      if (!adGroups || adGroups.length === 0) {
+        logger.warn('⚠️  No ad groups returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${adGroups.length} ad groups, saving to database...`);
 
       let synced = 0;
       let skipped = 0;
+      let errors = 0;
+      
+      // Build set of existing campaign IDs for faster lookup
+      const campaignResult = await db.query('SELECT campaign_id FROM campaigns');
+      const existingCampaignIds = new Set(campaignResult.rows.map(r => String(r.campaign_id)));
       
       for (const adGroup of adGroups) {
-        // Check if campaign exists before inserting ad group
-        const campaignCheck = await db.query(
-          'SELECT campaign_id FROM campaigns WHERE campaign_id = $1',
-          [adGroup.campaignId]
-        );
-        
-        if (campaignCheck.rows.length === 0) {
-          logger.warn(`Skipping ad group ${adGroup.adGroupId} - campaign ${adGroup.campaignId} not found`);
+        try {
+          // Validate required fields
+          if (!adGroup.adGroupId) {
+            logger.warn('Skipping ad group without adGroupId:', adGroup);
+            errors++;
+            continue;
+          }
+          
+          if (!adGroup.campaignId) {
+            logger.warn(`Skipping ad group ${adGroup.adGroupId} without campaignId`);
+            errors++;
+            continue;
+          }
+          
+          // Check if campaign exists
+          const campaignIdStr = String(adGroup.campaignId);
+          if (!existingCampaignIds.has(campaignIdStr)) {
+          logger.debug(`Skipping ad group ${adGroup.adGroupId} - campaign ${adGroup.campaignId} not found`);
           skipped++;
           continue;
         }
+
+          // v3 API response fields - ensure proper data types and defaults
+          const adGroupId = String(adGroup.adGroupId); // BIGINT as string
+          const adGroupName = adGroup.name || 'Unnamed Ad Group';
+          const campaignId = campaignIdStr;
+        const defaultBid = adGroup.defaultBid || adGroup.bid || null;
+          const state = (adGroup.state || 'ENABLED').toUpperCase(); // ENABLED, PAUSED, ARCHIVED - store in uppercase
         
         await db.query(
           `INSERT INTO ad_groups (
@@ -99,58 +185,99 @@ class DataSyncService {
             state = $5,
             updated_at = CURRENT_TIMESTAMP`,
           [
-            adGroup.adGroupId,
-            adGroup.name,
-            adGroup.campaignId,
-            adGroup.defaultBid,
-            adGroup.state
+            adGroupId,
+            adGroupName,
+            campaignId,
+            defaultBid,
+            state
           ]
         );
         synced++;
+        
+        // Log progress every 100 ad groups
+        if (synced % 100 === 0) {
+          logger.info(`📋 Ad groups progress: ${synced}/${adGroups.length}`);
+          }
+        } catch (error) {
+          logger.error(`Error syncing ad group ${adGroup.adGroupId}:`, error.message);
+          errors++;
+        }
       }
 
-      logger.info(`Synced ${synced} ad groups, skipped ${skipped} (missing campaigns)`);
+      logger.info(`✅ Synced ${synced} ad groups, skipped ${skipped} (missing campaigns)${errors > 0 ? `, ${errors} errors` : ''}`);
       return synced;
     } catch (error) {
-      logger.error('Error syncing ad groups:', error);
+      logger.error('❌ Error syncing ad groups:', error.message);
       throw error;
     }
   }
 
   /**
-   * Sync keywords data
+   * Sync keywords data using v3 API
+   * v3 API response structure:
+   * { keywordId, keywordText, matchType, campaignId, adGroupId, bid, state }
    */
   async syncKeywords() {
     try {
-      logger.info('Syncing keywords...');
+      logger.info('📋 Syncing keywords from Amazon Ads API v3...');
       const keywords = await this.client.getKeywords();
+
+      if (!keywords || keywords.length === 0) {
+        logger.warn('⚠️  No keywords returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${keywords.length} keywords, saving to database...`);
 
       let synced = 0;
       let skipped = 0;
+      let errors = 0;
+      
+      // Build a set of existing campaign and ad group IDs for faster lookup
+      const campaignResult = await db.query('SELECT campaign_id FROM campaigns');
+      const adGroupResult = await db.query('SELECT ad_group_id FROM ad_groups');
+      const campaignIds = new Set(campaignResult.rows.map(r => String(r.campaign_id)));
+      const adGroupIds = new Set(adGroupResult.rows.map(r => String(r.ad_group_id)));
       
       for (const keyword of keywords) {
-        // Check if campaign and ad group exist before inserting keyword
-        const campaignCheck = await db.query(
-          'SELECT campaign_id FROM campaigns WHERE campaign_id = $1',
-          [keyword.campaignId]
-        );
-        
-        const adGroupCheck = await db.query(
-          'SELECT ad_group_id FROM ad_groups WHERE ad_group_id = $1',
-          [keyword.adGroupId]
-        );
-        
-        if (campaignCheck.rows.length === 0) {
-          logger.warn(`Skipping keyword ${keyword.keywordId} - campaign ${keyword.campaignId} not found`);
+        try {
+          // Validate required fields
+          if (!keyword.keywordId) {
+            logger.warn('Skipping keyword without keywordId:', keyword);
+            errors++;
+            continue;
+          }
+          
+          if (!keyword.campaignId || !keyword.adGroupId) {
+            logger.warn(`Skipping keyword ${keyword.keywordId} without campaignId or adGroupId`);
+            errors++;
+            continue;
+          }
+          
+        // Check if campaign and ad group exist
+          const campaignIdStr = String(keyword.campaignId);
+          const adGroupIdStr = String(keyword.adGroupId);
+          
+          if (!campaignIds.has(campaignIdStr)) {
+          logger.debug(`Skipping keyword ${keyword.keywordId} - campaign ${keyword.campaignId} not found`);
           skipped++;
           continue;
         }
         
-        if (adGroupCheck.rows.length === 0) {
-          logger.warn(`Skipping keyword ${keyword.keywordId} - ad group ${keyword.adGroupId} not found`);
+          if (!adGroupIds.has(adGroupIdStr)) {
+          logger.debug(`Skipping keyword ${keyword.keywordId} - ad group ${keyword.adGroupId} not found`);
           skipped++;
           continue;
         }
+
+          // v3 API response fields - ensure proper data types and defaults
+          const keywordId = String(keyword.keywordId); // BIGINT as string
+          const keywordText = keyword.keywordText || keyword.keyword || '';
+          const matchType = (keyword.matchType || 'BROAD').toUpperCase(); // BROAD, PHRASE, EXACT
+          const campaignId = campaignIdStr;
+          const adGroupId = adGroupIdStr;
+        const bid = keyword.bid || null;
+          const state = (keyword.state || 'ENABLED').toUpperCase(); // ENABLED, PAUSED, ARCHIVED - store in uppercase
         
         await db.query(
           `INSERT INTO keywords (
@@ -167,22 +294,31 @@ class DataSyncService {
             state = $7,
             updated_at = CURRENT_TIMESTAMP`,
           [
-            keyword.keywordId,
-            keyword.keywordText,
-            keyword.matchType,
-            keyword.campaignId,
-            keyword.adGroupId,
-            keyword.bid,
-            keyword.state
+            keywordId,
+            keywordText,
+            matchType,
+            campaignId,
+            adGroupId,
+            bid,
+            state
           ]
         );
         synced++;
+        
+        // Log progress every 200 keywords
+        if (synced % 200 === 0) {
+          logger.info(`📋 Keywords progress: ${synced}/${keywords.length}`);
+          }
+        } catch (error) {
+          logger.error(`Error syncing keyword ${keyword.keywordId}:`, error.message);
+          errors++;
+        }
       }
 
-      logger.info(`Synced ${synced} keywords, skipped ${skipped} (missing campaigns/ad groups)`);
+      logger.info(`✅ Synced ${synced} keywords, skipped ${skipped} (missing campaigns/ad groups)${errors > 0 ? `, ${errors} errors` : ''}`);
       return synced;
     } catch (error) {
-      logger.error('Error syncing keywords:', error);
+      logger.error('❌ Error syncing keywords:', error.message);
       throw error;
     }
   }
@@ -298,6 +434,7 @@ class DataSyncService {
 
   /**
    * Sync performance data for ad groups
+   * v3 API now returns campaignId in report data
    */
   async syncAdGroupPerformance(reportDate) {
     try {
@@ -318,31 +455,25 @@ class DataSyncService {
       let skipped = 0;
       const total = reportData.length;
 
+      // Build lookup for ad groups if campaignId not in report
+      const adGroupResult = await db.query('SELECT ad_group_id, campaign_id FROM ad_groups');
+      const adGroupToCampaign = {};
+      adGroupResult.rows.forEach(r => {
+        adGroupToCampaign[String(r.ad_group_id)] = r.campaign_id;
+      });
+
       for (const record of reportData) {
         if (!record.adGroupId) continue;
 
-        // Check if campaign exists before inserting performance data
-        const campaignCheck = await db.query(
-          'SELECT campaign_id FROM campaigns WHERE campaign_id = $1',
-          [record.campaignId]
-        );
-        
-        if (campaignCheck.rows.length === 0) {
-          logger.warn(`Skipping ad group performance for ${record.adGroupId} - campaign ${record.campaignId} not found`);
-          skipped++;
-          continue;
-        }
-
-        // Check if ad group exists before inserting performance data
-        const adGroupCheck = await db.query(
-          'SELECT ad_group_id FROM ad_groups WHERE ad_group_id = $1',
-          [record.adGroupId]
-        );
-        
-        if (adGroupCheck.rows.length === 0) {
-          logger.warn(`Skipping ad group performance for ${record.adGroupId} - ad group not found in ad_groups table`);
-          skipped++;
-          continue;
+        // Use campaignId from report if available, otherwise lookup from database
+        let campaignId = record.campaignId;
+        if (!campaignId) {
+          campaignId = adGroupToCampaign[String(record.adGroupId)];
+          if (!campaignId) {
+            logger.debug(`Skipping ad group performance for ${record.adGroupId} - ad group not found in database`);
+            skipped++;
+            continue;
+          }
         }
 
         await db.query(
@@ -364,23 +495,23 @@ class DataSyncService {
             attributed_sales_7d = $10,
             updated_at = CURRENT_TIMESTAMP`,
           [
-            record.campaignId,
+            campaignId,
             record.adGroupId,
             dbDate,
             record.impressions || 0,
             record.clicks || 0,
             record.cost || 0,
-            record.purchases1d || 0,
-            record.purchases7d || 0,
-            record.sales1d || 0,
-            record.sales7d || 0
+            record.purchases1d || 0,  // API v3 returns purchases1d
+            record.purchases7d || 0,  // API v3 returns purchases7d
+            record.sales1d || 0,      // API v3 returns sales1d
+            record.sales7d || 0       // API v3 returns sales7d
           ]
         );
         synced++;
         
-        // Log progress every 10 records or at the end
-        if (synced % 10 === 0 || synced === total) {
-          logger.info(`📊 [AD GROUPS] Progress: ${synced}/${total} records saved (${Math.round(synced/total*100)}%)`);
+        // Log progress every 50 records
+        if (synced % 50 === 0) {
+          logger.info(`📊 [AD GROUPS] Progress: ${synced}/${total} records saved`);
         }
       }
 
@@ -394,6 +525,7 @@ class DataSyncService {
 
   /**
    * Sync performance data for keywords
+   * v3 API now returns campaignId and adGroupId in report data
    */
   async syncKeywordPerformance(reportDate) {
     try {
@@ -414,68 +546,235 @@ class DataSyncService {
       let skipped = 0;
       const total = reportData.length;
 
+      // Build lookup for keywords if data not in report
+      const keywordResult = await db.query('SELECT keyword_id, campaign_id, ad_group_id FROM keywords');
+      const keywordData = {};
+      keywordResult.rows.forEach(r => {
+        keywordData[String(r.keyword_id)] = { campaign_id: r.campaign_id, ad_group_id: r.ad_group_id };
+      });
+
       for (const record of reportData) {
         if (!record.keywordId) continue;
 
-        // Check if campaign exists before inserting performance data
-        const campaignCheck = await db.query(
-          'SELECT campaign_id FROM campaigns WHERE campaign_id = $1',
-          [record.campaignId]
-        );
+        // Use data from report if available, otherwise lookup from database
+        let campaignId = record.campaignId;
+        let adGroupId = record.adGroupId;
         
-        if (campaignCheck.rows.length === 0) {
-          logger.warn(`Skipping keyword performance for ${record.keywordId} - campaign ${record.campaignId} not found`);
+        // Check if keyword exists in database (required for foreign key constraint)
+        const kwData = keywordData[String(record.keywordId)];
+        if (!kwData) {
+          // This is likely a product target, not a keyword - skip it
+          skipped++;
+          continue;
+        }
+        
+        // Use lookup data if not provided in report
+        campaignId = campaignId || kwData.campaign_id;
+        adGroupId = adGroupId || kwData.ad_group_id;
+
+        try {
+          await db.query(
+            `INSERT INTO keyword_performance (
+              campaign_id, ad_group_id, keyword_id, report_date,
+              impressions, clicks, cost,
+              attributed_conversions_1d, attributed_conversions_7d,
+              attributed_sales_1d, attributed_sales_7d
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (keyword_id, report_date)
+            DO UPDATE SET
+              campaign_id = $1,
+              ad_group_id = $2,
+              impressions = $5,
+              clicks = $6,
+              cost = $7,
+              attributed_conversions_1d = $8,
+              attributed_conversions_7d = $9,
+              attributed_sales_1d = $10,
+              attributed_sales_7d = $11,
+              updated_at = CURRENT_TIMESTAMP`,
+            [
+              campaignId,
+              adGroupId,
+              record.keywordId,
+              dbDate,
+              record.impressions || 0,
+              record.clicks || 0,
+              record.cost || 0,
+              record.purchases1d || 0,  // API v3 returns purchases1d
+              record.purchases7d || 0,  // API v3 returns purchases7d
+              record.sales1d || 0,      // API v3 returns sales1d
+              record.sales7d || 0       // API v3 returns sales7d
+            ]
+          );
+          synced++;
+        } catch (dbError) {
+          // Handle foreign key constraint errors gracefully
+          if (dbError.message.includes('foreign key constraint')) {
+            skipped++;
+            continue;
+          }
+          throw dbError;
+        }
+        
+        // Log progress every 100 records
+        if (synced % 100 === 0) {
+          logger.info(`📊 [KEYWORDS] Progress: ${synced}/${total} records saved`);
+        }
+      }
+
+      logger.info(`✅ [KEYWORDS] Successfully synced ${synced} keyword performance records for ${reportDate}, skipped ${skipped}`);
+      return synced;
+    } catch (error) {
+      logger.error(`❌ [KEYWORDS] Error syncing keyword performance:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync product ads data using v3 API
+   * Product ads link products (ASINs) to ad groups
+   */
+  async syncProductAds() {
+    try {
+      logger.info('📋 Syncing product ads from Amazon Ads API v3...');
+      const productAds = await this.client.getProductAds();
+
+      if (!productAds || productAds.length === 0) {
+        logger.warn('⚠️  No product ads returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${productAds.length} product ads, saving to database...`);
+
+      // Build lookup for existing campaigns and ad groups
+      const campaignResult = await db.query('SELECT campaign_id FROM campaigns');
+      const adGroupResult = await db.query('SELECT ad_group_id FROM ad_groups');
+      const campaignIds = new Set(campaignResult.rows.map(r => String(r.campaign_id)));
+      const adGroupIds = new Set(adGroupResult.rows.map(r => String(r.ad_group_id)));
+
+      let synced = 0;
+      let skipped = 0;
+      let errors = 0;
+
+      for (const ad of productAds) {
+        try {
+          // Validate required fields
+          if (!ad.adId) {
+            logger.warn('Skipping product ad without adId:', ad);
+            errors++;
+            continue;
+          }
+          
+          if (!ad.campaignId || !ad.adGroupId) {
+            logger.warn(`Skipping product ad ${ad.adId} without campaignId or adGroupId`);
+            errors++;
+            continue;
+          }
+          
+        // Check if campaign and ad group exist
+          const campaignIdStr = String(ad.campaignId);
+          const adGroupIdStr = String(ad.adGroupId);
+          
+          if (!campaignIds.has(campaignIdStr)) {
+          logger.debug(`Skipping product ad ${ad.adId} - campaign ${ad.campaignId} not found`);
           skipped++;
           continue;
         }
 
-        // Check if ad group exists before inserting performance data
-        const adGroupCheck = await db.query(
-          'SELECT ad_group_id FROM ad_groups WHERE ad_group_id = $1',
-          [record.adGroupId]
-        );
-        
-        if (adGroupCheck.rows.length === 0) {
-          logger.warn(`Skipping keyword performance for ${record.keywordId} - ad group ${record.adGroupId} not found`);
-          skipped++;
-          continue;
-        }
-
-        // Check if keyword exists before inserting performance data
-        const keywordCheck = await db.query(
-          'SELECT keyword_id FROM keywords WHERE keyword_id = $1',
-          [record.keywordId]
-        );
-        
-        if (keywordCheck.rows.length === 0) {
-          logger.warn(`Skipping keyword performance for ${record.keywordId} - keyword not found in keywords table`);
+          if (!adGroupIds.has(adGroupIdStr)) {
+          logger.debug(`Skipping product ad ${ad.adId} - ad group ${ad.adGroupId} not found`);
           skipped++;
           continue;
         }
 
         await db.query(
-          `INSERT INTO keyword_performance (
-            campaign_id, ad_group_id, keyword_id, report_date,
+          `INSERT INTO product_ads (
+            ad_id, campaign_id, ad_group_id, asin, sku, state
+          ) VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (ad_id)
+          DO UPDATE SET
+            campaign_id = $2,
+            ad_group_id = $3,
+            asin = $4,
+            sku = $5,
+            state = $6,
+            updated_at = CURRENT_TIMESTAMP`,
+          [
+              String(ad.adId), // BIGINT as string
+              campaignIdStr,
+              adGroupIdStr,
+            ad.asin || null,
+            ad.sku || null,
+              (ad.state || 'ENABLED').toUpperCase() // Store in uppercase
+          ]
+        );
+        synced++;
+
+        if (synced % 100 === 0) {
+          logger.info(`📋 Product ads progress: ${synced}/${productAds.length}`);
+          }
+        } catch (error) {
+          logger.error(`Error syncing product ad ${ad.adId}:`, error.message);
+          errors++;
+        }
+      }
+
+      logger.info(`✅ Synced ${synced} product ads, skipped ${skipped}${errors > 0 ? `, ${errors} errors` : ''}`);
+      return synced;
+    } catch (error) {
+      logger.error('❌ Error syncing product ads:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync search term performance data
+   * Used for negative keyword analysis and search term harvesting
+   */
+  async syncSearchTermPerformance(reportDate) {
+    try {
+      logger.info(`📊 [SEARCH TERMS] Syncing search term performance for ${reportDate}...`);
+      
+      const reportData = await this.client.getSearchTermPerformanceData(reportDate);
+
+      if (!reportData || reportData.length === 0) {
+        logger.warn(`⚠️  [SEARCH TERMS] No search term data returned for ${reportDate}`);
+        return 0;
+      }
+
+      logger.info(`📊 [SEARCH TERMS] Received ${reportData.length} records, saving to database...`);
+      
+      const dbDate = this.formatDateForDB(reportDate);
+      let synced = 0;
+      let skipped = 0;
+
+      for (const record of reportData) {
+        if (!record.searchTerm) continue;
+
+        await db.query(
+          `INSERT INTO search_term_performance (
+            campaign_id, ad_group_id, keyword_id, search_term, report_date,
             impressions, clicks, cost,
             attributed_conversions_1d, attributed_conversions_7d,
             attributed_sales_1d, attributed_sales_7d
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-          ON CONFLICT (keyword_id, report_date)
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (search_term, keyword_id, report_date)
           DO UPDATE SET
             campaign_id = $1,
             ad_group_id = $2,
-            impressions = $5,
-            clicks = $6,
-            cost = $7,
-            attributed_conversions_1d = $8,
-            attributed_conversions_7d = $9,
-            attributed_sales_1d = $10,
-            attributed_sales_7d = $11,
+            impressions = $6,
+            clicks = $7,
+            cost = $8,
+            attributed_conversions_1d = $9,
+            attributed_conversions_7d = $10,
+            attributed_sales_1d = $11,
+            attributed_sales_7d = $12,
             updated_at = CURRENT_TIMESTAMP`,
           [
             record.campaignId,
             record.adGroupId,
-            record.keywordId,
+            record.keywordId || null,
+            record.searchTerm,
             dbDate,
             record.impressions || 0,
             record.clicks || 0,
@@ -487,17 +786,40 @@ class DataSyncService {
           ]
         );
         synced++;
-        
-        // Log progress every 20 records or at the end (keywords can be numerous)
-        if (synced % 20 === 0 || synced === total) {
-          logger.info(`📊 [KEYWORDS] Progress: ${synced}/${total} records saved (${Math.round(synced/total*100)}%)`);
+
+        if (synced % 500 === 0) {
+          logger.info(`📊 [SEARCH TERMS] Progress: ${synced}/${reportData.length} records saved`);
         }
       }
 
-      logger.info(`✅ [KEYWORDS] Successfully synced ${synced} keyword performance records for ${reportDate}, skipped ${skipped}`);
+      logger.info(`✅ [SEARCH TERMS] Successfully synced ${synced} search term records for ${reportDate}`);
       return synced;
     } catch (error) {
-      logger.error(`❌ [KEYWORDS] Error syncing keyword performance:`, error.message);
+      logger.error(`❌ [SEARCH TERMS] Error syncing search term performance:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync negative keywords from Amazon Ads
+   */
+  async syncNegativeKeywords() {
+    try {
+      logger.info('📋 Syncing negative keywords from Amazon Ads API v3...');
+      
+      const [adGroupNegatives, campaignNegatives] = await Promise.all([
+        this.client.getNegativeKeywords(),
+        this.client.getCampaignNegativeKeywords()
+      ]);
+
+      logger.info(`📥 Retrieved ${adGroupNegatives.length} ad group negatives, ${campaignNegatives.length} campaign negatives`);
+
+      // For now, just log - the negative_keyword_history table is used by the AI rule engine
+      // We could store these for reference if needed
+      
+      return adGroupNegatives.length + campaignNegatives.length;
+    } catch (error) {
+      logger.error('❌ Error syncing negative keywords:', error.message);
       throw error;
     }
   }
@@ -527,25 +849,34 @@ class DataSyncService {
   }
 
   /**
-   * Full sync - campaigns, ad groups, keywords, and performance data
+   * Full sync - campaigns, ad groups, keywords, product ads, and performance data
    */
   async fullSync(daysBack = 7) {
     const startTime = new Date();
-    const totalRecords = { campaigns: 0, adGroups: 0, keywords: 0, performance: 0 };
+    const totalRecords = { campaigns: 0, adGroups: 0, keywords: 0, productAds: 0, performance: 0 };
 
     try {
       logger.info('═══════════════════════════════════════════════════════');
-      logger.info('🚀 STARTING FULL DATA SYNC');
+      logger.info('🚀 STARTING FULL DATA SYNC (Amazon Ads API v3)');
       logger.info(`📅 Syncing performance data for the last ${daysBack} days`);
       logger.info('═══════════════════════════════════════════════════════');
 
       // Sync metadata
-      logger.info('\n📋 PHASE 1: Syncing Metadata');
-      logger.info('───────────────────────────────────────────────────────');
-      totalRecords.campaigns = await this.syncCampaigns();
-      totalRecords.adGroups = await this.syncAdGroups();
-      totalRecords.keywords = await this.syncKeywords();
-      logger.info(`✅ Metadata sync complete: ${totalRecords.campaigns} campaigns, ${totalRecords.adGroups} ad groups, ${totalRecords.keywords} keywords`);
+      // logger.info('\n📋 PHASE 1: Syncing Metadata');
+      // logger.info('───────────────────────────────────────────────────────');
+      // totalRecords.campaigns = await this.syncCampaigns();
+      // totalRecords.adGroups = await this.syncAdGroups();
+      // totalRecords.keywords = await this.syncKeywords();
+      
+      // // Try to sync product ads (may fail on some accounts)
+      // try {
+      //   totalRecords.productAds = await this.syncProductAds();
+      // } catch (error) {
+      //   logger.warn(`⚠️  Product ads sync skipped: ${error.message}`);
+      //   totalRecords.productAds = 0;
+      // }
+      
+      // logger.info(`✅ Metadata sync complete: ${totalRecords.campaigns} campaigns, ${totalRecords.adGroups} ad groups, ${totalRecords.keywords} keywords, ${totalRecords.productAds} product ads`);
 
       // Sync performance data for the last N days
       logger.info('\n📊 PHASE 2: Syncing Performance Data');
@@ -607,6 +938,7 @@ class DataSyncService {
       logger.info(`   • Campaigns synced: ${totalRecords.campaigns}`);
       logger.info(`   • Ad Groups synced: ${totalRecords.adGroups}`);
       logger.info(`   • Keywords synced: ${totalRecords.keywords}`);
+      logger.info(`   • Product Ads synced: ${totalRecords.productAds}`);
       logger.info(`   • Performance records: ${totalRecords.performance}`);
       logger.info(`   • Total records: ${total}`);
       logger.info(`   • Duration: ${duration} seconds`);

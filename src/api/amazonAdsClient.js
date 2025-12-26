@@ -2,6 +2,15 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 const config = require('../config/config');
 
+/**
+ * Amazon Ads API Client
+ * 
+ * Uses Amazon Ads API v3 (current stable version)
+ * - For entity management (campaigns, ad groups, keywords): Sponsored Products v3 endpoints
+ * - For reporting: Reporting v3 endpoints
+ * 
+ * API Documentation: https://advertising.amazon.com/API/docs/en-us/
+ */
 class AmazonAdsClient {
   constructor() {
     this.accessToken = null;
@@ -16,6 +25,17 @@ class AmazonAdsClient {
     try {
       logger.info('Refreshing Amazon Ads API access token...');
 
+      // Validate required credentials
+      if (!this.config.refreshToken) {
+        throw new Error('AMAZON_REFRESH_TOKEN is not configured. Please check your .env file.');
+      }
+      if (!this.config.clientId) {
+        throw new Error('AMAZON_CLIENT_ID is not configured. Please check your .env file.');
+      }
+      if (!this.config.clientSecret) {
+        throw new Error('AMAZON_CLIENT_SECRET is not configured. Please check your .env file.');
+      }
+
       const params = new URLSearchParams({
         grant_type: 'refresh_token',
         refresh_token: this.config.refreshToken,
@@ -26,7 +46,8 @@ class AmazonAdsClient {
       const response = await axios.post(this.config.tokenEndpoint, params.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
-        }
+        },
+        timeout: 30000
       });
 
       this.accessToken = response.data.access_token;
@@ -36,8 +57,18 @@ class AmazonAdsClient {
       logger.info('Access token refreshed successfully');
       return this.accessToken;
     } catch (error) {
-      logger.error('Error refreshing access token:', error.response?.data || error.message);
-      throw new Error('Failed to refresh access token: ' + (error.response?.data?.error_description || error.message));
+      const errorData = error.response?.data || {};
+      const errorMessage = errorData.error_description || errorData.error || error.message;
+      
+      // Provide helpful error messages for common issues
+      if (errorData.error === 'invalid_grant') {
+        logger.error('Refresh token is invalid or expired. Please generate a new refresh token.');
+        throw new Error('Invalid or expired refresh token. Please regenerate your Amazon Ads API credentials. ' +
+          'Visit: https://advertising.amazon.com/API/docs/en-us/setting-up/step-1-create-an-application');
+      }
+      
+      logger.error('Error refreshing access token:', errorData);
+      throw new Error('Failed to refresh access token: ' + errorMessage);
     }
   }
 
@@ -53,8 +84,15 @@ class AmazonAdsClient {
 
   /**
    * Make an authenticated API request with retry logic
+   * @param {string} method - HTTP method
+   * @param {string} endpoint - API endpoint
+   * @param {object} data - Request body data
+   * @param {object} params - Query parameters
+   * @param {number} retries - Number of retries
+   * @param {number} baseDelay - Base delay for exponential backoff
+   * @param {object} customHeaders - Custom headers to override defaults
    */
-  async makeRequest(method, endpoint, data = null, params = null, retries = 3, baseDelay = 1000) {
+  async makeRequest(method, endpoint, data = null, params = null, retries = 3, baseDelay = 1000, customHeaders = {}) {
     const maxRetries = retries;
     let lastError;
 
@@ -67,7 +105,8 @@ class AmazonAdsClient {
           'Amazon-Advertising-API-ClientId': this.config.clientId,
           'Amazon-Advertising-API-Scope': this.config.profileId,
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          ...customHeaders  // Allow custom headers to override defaults
         };
 
         const requestConfig = {
@@ -111,13 +150,19 @@ class AmazonAdsClient {
           }
           
           // Don't retry on these status codes
-          if ([400, 401, 403, 404].includes(status)) {
+          if ([400, 401, 403, 404, 415].includes(status)) {
+            const errorDetail = error.response?.data;
             if (status === 404) {
               throw new Error(`API endpoint not found: ${endpoint}. Please check if the API version is correct.`);
             } else if (status === 401) {
               throw new Error('Authentication failed. Please check your API credentials.');
             } else if (status === 403) {
               throw new Error('Access forbidden. Please check your API permissions and profile ID.');
+            } else if (status === 415) {
+              throw new Error(`Unsupported Media Type (415) - Endpoint: ${method} ${endpoint}. Error: ${JSON.stringify(errorDetail)}`);
+            } else if (status === 400) {
+              logger.error(`Bad Request (400) - Endpoint: ${method} ${endpoint}`, errorDetail);
+              throw new Error(`Bad Request: ${JSON.stringify(errorDetail)}`);
             }
             throw error;
           }
@@ -166,80 +211,315 @@ class AmazonAdsClient {
   }
 
   /**
-   * Helper method to handle pagination for API requests
+   * Helper method to handle pagination for API v3 POST-based list requests
+   * Amazon Ads API v3 uses cursor-based pagination with POST requests
+   * @param {string} endpoint - API endpoint
+   * @param {object} requestBody - Request body
+   * @param {object} customHeaders - Custom headers (e.g., Accept header for v3 API)
    */
-  async getAllPaginatedData(endpoint, params = {}) {
+  async getAllPaginatedDataV3(endpoint, requestBody = {}, customHeaders = {}) {
     const allData = [];
-    let startIndex = 0;
-    const pageSize = 1000;
-    let hasMore = true;
+    let nextToken = null;
+    const maxResults = 1000; // Max allowed per request
+    let pageCount = 0;
+    const maxPages = 1000; // Safety limit to prevent infinite loops
 
-    while (hasMore) {
-      const paginatedParams = {
-        ...params,
-        startIndex,
-        count: pageSize
+    do {
+      pageCount++;
+      
+      // Safety check to prevent infinite loops
+      if (pageCount > maxPages) {
+        logger.warn(`Reached maximum page limit (${maxPages}), stopping pagination`);
+        break;
+      }
+      
+      const body = {
+        ...requestBody,
+        maxResults
       };
 
-      const response = await this.makeRequest('GET', endpoint, null, paginatedParams);
+      // Add pagination token if we have one
+      if (nextToken) {
+        body.nextToken = nextToken;
+      }
+
+      logger.debug(`Fetching page ${pageCount} from ${endpoint}...`);
       
-      if (response && response.length > 0) {
-        allData.push(...response);
+      try {
+        const response = await this.makeRequest('POST', endpoint, body, null, 3, 1000, customHeaders);
         
-        // If we got fewer results than the page size, we're done
-        if (response.length < pageSize) {
-          hasMore = false;
-        } else {
-          startIndex += pageSize;
+        if (!response) {
+          logger.warn(`Empty response from ${endpoint} on page ${pageCount}`);
+          break;
         }
-      } else {
-        hasMore = false;
+        
+        // V3 API returns data in different structures depending on endpoint
+        // Most list endpoints return { campaigns: [], nextToken } or similar
+        const responseData = response;
+        
+        // Extract the data array from response (could be campaigns, adGroups, keywords, etc.)
+        let dataArray = [];
+        
+        if (Array.isArray(responseData)) {
+          // Some endpoints return an array directly
+          dataArray = responseData;
+        } else if (typeof responseData === 'object') {
+          // Try known field names first
+          if (responseData.campaigns) {
+            dataArray = responseData.campaigns;
+          } else if (responseData.adGroups) {
+            dataArray = responseData.adGroups;
+          } else if (responseData.keywords) {
+            dataArray = responseData.keywords;
+          } else if (responseData.productAds) {
+            dataArray = responseData.productAds;
+          } else if (responseData.targets) {
+            dataArray = responseData.targets;
+          } else if (responseData.negativeKeywords) {
+            dataArray = responseData.negativeKeywords;
+          } else if (responseData.campaignNegativeKeywords) {
+            dataArray = responseData.campaignNegativeKeywords;
+          } else {
+            // Try to find any array in the response (excluding nextToken)
+            const keys = Object.keys(responseData).filter(k => k !== 'nextToken');
+            for (const key of keys) {
+              if (Array.isArray(responseData[key])) {
+                dataArray = responseData[key];
+                logger.debug(`Found data array in field: ${key}`);
+                break;
+              }
+            }
+          }
+        }
+
+        // Validate and add data
+        if (Array.isArray(dataArray) && dataArray.length > 0) {
+          allData.push(...dataArray);
+          logger.debug(`Page ${pageCount}: Retrieved ${dataArray.length} records`);
+        } else if (pageCount === 1) {
+          // First page with no data - might be empty result set
+          logger.info(`No data returned from ${endpoint}`);
+          break;
+        }
+
+        // Get next page token
+        const previousToken = nextToken;
+        nextToken = responseData.nextToken || null;
+        
+        // Safety check: if nextToken is the same as previous, stop to prevent infinite loop
+        if (nextToken && nextToken === previousToken) {
+          logger.warn(`Duplicate nextToken detected, stopping pagination to prevent infinite loop`);
+          break;
+        }
+
+        // Log progress for large datasets
+        if (allData.length % 1000 === 0 && allData.length > 0) {
+          logger.info(`Retrieved ${allData.length} records so far...`);
+        }
+      } catch (error) {
+        logger.error(`Error fetching page ${pageCount} from ${endpoint}:`, error.message);
+        // If we have some data, return it; otherwise rethrow
+        if (allData.length > 0) {
+          logger.warn(`Returning ${allData.length} records fetched before error`);
+          break;
+        }
+        throw error;
       }
 
-      // Log progress for large datasets
-      if (allData.length % 1000 === 0 && allData.length > 0) {
-        logger.info(`Retrieved ${allData.length} records...`);
-      }
-    }
+    } while (nextToken);
 
-    logger.info(`Total records retrieved: ${allData.length}`);
+    logger.info(`Total records retrieved from ${endpoint}: ${allData.length} (${pageCount} pages)`);
     return allData;
   }
 
   /**
-   * Get all campaigns with pagination
+   * Get all Sponsored Products campaigns using v3 API
+   * Endpoint: POST /sp/campaigns/list
    */
-  async getCampaigns(params = {}) {
-    logger.info('Fetching campaigns...');
-    const defaultParams = {
-      stateFilter: 'enabled,paused,archived',
-      ...params
+  async getCampaigns(filters = {}) {
+    logger.info('Fetching Sponsored Products campaigns (v3 API)...');
+    
+    const requestBody = {
+      // Include all states by default
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
     };
-    return await this.getAllPaginatedData('/v2/campaigns', defaultParams);
+
+    // Add optional filters
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.nameFilter) {
+      requestBody.nameFilter = filters.nameFilter;
+    }
+
+    // v3 API requires version-specific Content-Type and Accept headers
+    const customHeaders = {
+      'Content-Type': 'application/vnd.spcampaign.v3+json',
+      'Accept': 'application/vnd.spcampaign.v3+json'
+    };
+
+    return await this.getAllPaginatedDataV3('/sp/campaigns/list', requestBody, customHeaders);
   }
 
   /**
-   * Get all ad groups for a campaign with pagination
+   * Get all Sponsored Products ad groups using v3 API
+   * Endpoint: POST /sp/adGroups/list
    */
-  async getAdGroups(params = {}) {
-    logger.info('Fetching ad groups...');
-    const defaultParams = {
-      stateFilter: 'enabled,paused,archived',
-      ...params
+  async getAdGroups(filters = {}) {
+    logger.info('Fetching Sponsored Products ad groups (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
     };
-    return await this.getAllPaginatedData('/v2/adGroups', defaultParams);
+
+    // Add optional filters
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.adGroupIdFilter) {
+      requestBody.adGroupIdFilter = filters.adGroupIdFilter;
+    }
+
+    // v3 API requires version-specific Content-Type and Accept headers
+    const customHeaders = {
+      'Content-Type': 'application/vnd.spadgroup.v3+json',
+      'Accept': 'application/vnd.spadgroup.v3+json'
+    };
+
+    return await this.getAllPaginatedDataV3('/sp/adGroups/list', requestBody, customHeaders);
   }
 
   /**
-   * Get all keywords with pagination
+   * Get all Sponsored Products keywords using v3 API
+   * Endpoint: POST /sp/keywords/list
    */
-  async getKeywords(params = {}) {
-    logger.info('Fetching keywords...');
-    const defaultParams = {
-      stateFilter: 'enabled,paused,archived',
-      ...params
+  async getKeywords(filters = {}) {
+    logger.info('Fetching Sponsored Products keywords (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
     };
-    return await this.getAllPaginatedData('/v2/keywords', defaultParams);
+
+    // Add optional filters
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.adGroupIdFilter) {
+      requestBody.adGroupIdFilter = filters.adGroupIdFilter;
+    }
+    if (filters.keywordIdFilter) {
+      requestBody.keywordIdFilter = filters.keywordIdFilter;
+    }
+
+    // v3 API requires version-specific Content-Type and Accept headers
+    const customHeaders = {
+      'Content-Type': 'application/vnd.spkeyword.v3+json',
+      'Accept': 'application/vnd.spkeyword.v3+json'
+    };
+
+    return await this.getAllPaginatedDataV3('/sp/keywords/list', requestBody, customHeaders);
+  }
+
+  /**
+   * Get all Sponsored Products product ads using v3 API
+   * Endpoint: POST /sp/productAds/list
+   */
+  async getProductAds(filters = {}) {
+    logger.info('Fetching Sponsored Products product ads (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
+    };
+
+    // Add optional filters
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.adGroupIdFilter) {
+      requestBody.adGroupIdFilter = filters.adGroupIdFilter;
+    }
+
+    // v3 API requires version-specific Content-Type and Accept headers
+    const customHeaders = {
+      'Content-Type': 'application/vnd.spproductad.v3+json',
+      'Accept': 'application/vnd.spproductad.v3+json'
+    };
+
+    return await this.getAllPaginatedDataV3('/sp/productAds/list', requestBody, customHeaders);
+  }
+
+  /**
+   * Get all Sponsored Products negative keywords using v3 API
+   * Endpoint: POST /sp/negativeKeywords/list
+   */
+  async getNegativeKeywords(filters = {}) {
+    logger.info('Fetching Sponsored Products negative keywords (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
+    };
+
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.adGroupIdFilter) {
+      requestBody.adGroupIdFilter = filters.adGroupIdFilter;
+    }
+
+    return await this.getAllPaginatedDataV3('/sp/negativeKeywords/list', requestBody);
+  }
+
+  /**
+   * Get all campaign negative keywords using v3 API
+   * Endpoint: POST /sp/campaignNegativeKeywords/list
+   */
+  async getCampaignNegativeKeywords(filters = {}) {
+    logger.info('Fetching Sponsored Products campaign negative keywords (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
+    };
+
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+
+    return await this.getAllPaginatedDataV3('/sp/campaignNegativeKeywords/list', requestBody);
+  }
+
+  /**
+   * Get Sponsored Products targets (product targeting) using v3 API
+   * Endpoint: POST /sp/targets/list
+   */
+  async getTargets(filters = {}) {
+    logger.info('Fetching Sponsored Products targets (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
+    };
+
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.adGroupIdFilter) {
+      requestBody.adGroupIdFilter = filters.adGroupIdFilter;
+    }
+
+    return await this.getAllPaginatedDataV3('/sp/targets/list', requestBody);
   }
 
   /**
@@ -250,20 +530,31 @@ class AmazonAdsClient {
     logger.info(`Requesting ${reportType} report for ${reportDate} using v3 API...`);
 
     const metricsArray = metrics || this.getDefaultMetrics(reportType);
+    
+    // Map report types to API reportTypeId values
+    // Note: spAdGroups and spKeywords are NOT available for all accounts
+    // Use spCampaigns with groupBy: adGroup for ad groups
+    // Use spTargeting with groupBy: targeting for keywords
     const reportTypeMap = {
       'campaigns': 'spCampaigns',
-      'adGroups': 'spAdGroups',
-      'keywords': 'spKeywords'
+      'adGroups': 'spCampaigns',        // Use spCampaigns with groupBy: adGroup
+      'keywords': 'spTargeting',         // Use spTargeting for keyword data
+      'productAds': 'spAdvertisedProduct',
+      'searchTerms': 'spSearchTerm',
+      'purchasedProducts': 'spPurchasedProduct'
     };
 
     // Convert YYYYMMDD format to YYYY-MM-DD format for API
     const formattedDate = this.formatDateForAPI(reportDate);
 
-    // Fixed groupBy values according to Amazon Ads API v3 documentation
+    // GroupBy values for each report type
     const groupByMap = {
       'campaigns': ['campaign'],
-      'adGroups': ['adGroup'],
-      'keywords': ['keyword']
+      'adGroups': ['adGroup'],           // groupBy adGroup with spCampaigns
+      'keywords': ['targeting'],         // groupBy targeting with spTargeting
+      'productAds': ['advertiser'],
+      'searchTerms': ['searchTerm'],
+      'purchasedProducts': ['asin']
     };
 
     // v3 API format - dates go at top level, not inside configuration
@@ -281,10 +572,37 @@ class AmazonAdsClient {
       }
     };
 
-    logger.debug('v3 Report request config:', reportConfig);
+    logger.debug('v3 Report request config:', JSON.stringify(reportConfig, null, 2));
 
-    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig);
+    // Use the correct Content-Type header for v3 report creation
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig, null, 3, 1000, headers);
     return response.reportId;
+  }
+
+  /**
+   * Request a search term report using v3 API
+   * Used for negative keyword analysis and search term harvesting
+   */
+  async requestSearchTermReport(reportDate) {
+    logger.info(`Requesting search term report for ${reportDate}...`);
+    return await this.requestReport('searchTerms', reportDate);
+  }
+
+  /**
+   * Get search term performance data
+   */
+  async getSearchTermPerformanceData(reportDate) {
+    logger.info(`Fetching search term performance data for ${reportDate}...`);
+
+    const reportId = await this.requestSearchTermReport(reportDate);
+    const reportData = await this.waitAndDownloadReport(reportId);
+
+    return reportData;
   }
 
   /**
@@ -300,7 +618,11 @@ class AmazonAdsClient {
    * Get report status using v3 API
    */
   async getReportStatus(reportId) {
-    return await this.makeRequest('GET', `/reporting/reports/${reportId}`);
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+    return await this.makeRequest('GET', `/reporting/reports/${reportId}`, null, null, 3, 1000, headers);
   }
 
   /**
@@ -344,14 +666,147 @@ class AmazonAdsClient {
 
   /**
    * Get default metrics for a report type
-   * Updated for Amazon Ads API v3 with correct column names
+   * Updated for Amazon Ads API v3 with validated column names
+   * IMPORTANT: Each report type and groupBy combination has specific allowed columns
    */
   getDefaultMetrics(reportType) {
     const metricsMap = {
+      // spCampaigns with groupBy: ['campaign']
+      // Has campaign-level columns
       campaigns: [
+        'date',
         'campaignId',
         'campaignName',
         'campaignStatus',
+        'campaignBudgetAmount',
+        'campaignBudgetType',
+        'campaignBiddingStrategy',
+        'impressions',
+        'clicks',
+        'cost',
+        'costPerClick',
+        'clickThroughRate',
+        'purchases1d',
+        'purchases7d',
+        'purchases14d',
+        'purchases30d',
+        'sales1d',
+        'sales7d',
+        'sales14d',
+        'sales30d',
+        'unitsSoldClicks1d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d'
+      ],
+      // spCampaigns with groupBy: ['adGroup']
+      // Has ad group columns, also includes some campaign columns
+      adGroups: [
+        'date',
+        'campaignBiddingStrategy',
+        'adGroupId',
+        'adGroupName',
+        'adStatus',
+        'impressions',
+        'clicks',
+        'clickThroughRate',
+        'cost',
+        'spend',
+        'costPerClick',
+        'purchases1d',
+        'purchases7d',
+        'purchases14d',
+        'purchases30d',
+        'purchasesSameSku1d',
+        'purchasesSameSku7d',
+        'purchasesSameSku14d',
+        'purchasesSameSku30d',
+        'sales1d',
+        'sales7d',
+        'sales14d',
+        'sales30d',
+        'attributedSalesSameSku1d',
+        'attributedSalesSameSku7d',
+        'attributedSalesSameSku14d',
+        'attributedSalesSameSku30d',
+        'unitsSoldClicks1d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d',
+        'unitsSoldSameSku1d',
+        'unitsSoldSameSku7d',
+        'unitsSoldSameSku14d',
+        'unitsSoldSameSku30d',
+        'roasClicks14d',
+        'acosClicks14d',
+        'addToList',
+        'retailer'
+      ],
+      // spTargeting with groupBy: ['targeting'] - used for keyword data
+      // Uses 'keyword' not 'keywordText', 'adKeywordStatus' not 'keywordStatus'
+      keywords: [
+        'date',
+        'campaignId',
+        'campaignName',
+        'campaignStatus',
+        'campaignBudgetAmount',
+        'campaignBudgetCurrencyCode',
+        'campaignBudgetType',
+        'adGroupId',
+        'adGroupName',
+        'keywordId',
+        'keyword',
+        'matchType',
+        'keywordBid',
+        'adKeywordStatus',
+        'targeting',
+        'keywordType',
+        'impressions',
+        'clicks',
+        'clickThroughRate',
+        'cost',
+        'costPerClick',
+        'topOfSearchImpressionShare',
+        'purchases1d',
+        'purchases7d',
+        'purchases14d',
+        'purchases30d',
+        'purchasesSameSku1d',
+        'purchasesSameSku7d',
+        'purchasesSameSku14d',
+        'purchasesSameSku30d',
+        'sales1d',
+        'sales7d',
+        'sales14d',
+        'sales30d',
+        'attributedSalesSameSku1d',
+        'attributedSalesSameSku7d',
+        'attributedSalesSameSku14d',
+        'attributedSalesSameSku30d',
+        'salesOtherSku7d',
+        'unitsSoldClicks1d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d',
+        'unitsSoldSameSku1d',
+        'unitsSoldSameSku7d',
+        'unitsSoldSameSku14d',
+        'unitsSoldSameSku30d',
+        'unitsSoldOtherSku7d',
+        'roasClicks7d',
+        'roasClicks14d',
+        'acosClicks7d',
+        'acosClicks14d'
+      ],
+      // spAdvertisedProduct with groupBy: ['advertiser']
+      productAds: [
+        'date',
+        'adGroupId',
+        'adGroupName',
+        'adId',
+        'asin',
+        'sku',
+        'adStatus',
         'impressions',
         'clicks',
         'cost',
@@ -362,33 +817,87 @@ class AmazonAdsClient {
         'sales1d',
         'sales7d',
         'sales14d',
-        'sales30d'
+        'sales30d',
+        'unitsSoldClicks1d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d'
       ],
-      adGroups: [
+      // spTargeting with groupBy: ['targeting']
+      targets: [
+        'date',
         'campaignId',
+        'campaignName',
         'adGroupId',
         'adGroupName',
+        'targeting',
         'impressions',
         'clicks',
         'cost',
+        'costPerClick',
+        'clickThroughRate',
         'purchases1d',
         'purchases7d',
+        'purchases14d',
+        'purchases30d',
         'sales1d',
-        'sales7d'
+        'sales7d',
+        'sales14d',
+        'sales30d',
+        'unitsSoldClicks1d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d'
       ],
-      keywords: [
+      // spSearchTerm with groupBy: ['searchTerm']
+      searchTerms: [
+        'date',
         'campaignId',
+        'campaignName',
         'adGroupId',
+        'adGroupName',
         'keywordId',
-        'keywordText',
+        'keyword',
         'matchType',
+        'searchTerm',
         'impressions',
         'clicks',
         'cost',
         'purchases1d',
         'purchases7d',
+        'purchases14d',
+        'purchases30d',
         'sales1d',
-        'sales7d'
+        'sales7d',
+        'sales14d',
+        'sales30d',
+        'unitsSoldClicks1d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d'
+      ],
+      // spPurchasedProduct with groupBy: ['asin']
+      purchasedProducts: [
+        'date',
+        'campaignId',
+        'campaignName',
+        'adGroupId',
+        'adGroupName',
+        'advertisedAsin',
+        'advertisedSku',
+        'purchasedAsin',
+        'purchases1d',
+        'purchases7d',
+        'purchases14d',
+        'purchases30d',
+        'sales1d',
+        'sales7d',
+        'sales14d',
+        'sales30d',
+        'unitsSoldClicks1d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d'
       ]
     };
 
@@ -451,43 +960,42 @@ class AmazonAdsClient {
   }
 
   /**
-   * Request keyword performance report
-   * Using specific columns as allowed by the API
+   * Request keyword performance report using v3 API
+   * Using spTargeting report type with groupBy: ['targeting']
+   * Note: spKeywords is NOT available for all accounts, so we use spTargeting
    */
   async requestKeywordReport(reportDate) {
     logger.info(`Requesting keyword performance report for ${reportDate}...`);
     
     const formattedDate = this.formatDateForAPI(reportDate);
     
-    // Using only the allowed metric names from the API error message
+    // Use comprehensive metrics from getDefaultMetrics
+    const columns = this.getDefaultMetrics('keywords');
+    
+    // v3 API uses spTargeting report type with groupBy: ['targeting'] for keyword data
     const reportConfig = {
       name: `keywords_${reportDate}`,
       startDate: formattedDate,
       endDate: formattedDate,
       configuration: {
         adProduct: 'SPONSORED_PRODUCTS',
-        groupBy: ['adGroup'],
-        columns: [
-          'keywordId',
-          'keywordText',
-          'impressions',
-          'clicks',
-          'cost',
-          'currency',
-          'attributedConversions1d',
-          'attributedConversions7d',
-          'attributedSales1d',
-          'attributedSales7d',
-          'matchType'
-        ],
-        reportTypeId: 'spKeywords',
+        groupBy: ['targeting'],
+        columns: columns,
+        reportTypeId: 'spTargeting',
         timeUnit: 'DAILY',
         format: 'GZIP_JSON'
       }
     };
 
-    logger.debug('Keyword report request config:', reportConfig);
-    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig);
+    logger.debug('Keyword report request config:', JSON.stringify(reportConfig, null, 2));
+
+    // Use the correct Content-Type header for v3 report creation
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig, null, 3, 1000, headers);
     return response.reportId;
   }
 

@@ -223,15 +223,6 @@ class RuleConfig:
     warm_up_mode_threshold: int = 100  # Skip AI prediction if training samples < this threshold
     enable_warm_up_mode: bool = True  # Enable warm-up mode to use math-based ACOS tiers when insufficient training data
     
-    # Comprehensive Safety Veto Configuration (#19)
-    enable_comprehensive_safety_veto: bool = True
-    spend_spike_veto_threshold: float = 2.0  # 200% spend increase triggers veto
-    spend_spike_veto_lookback_days: int = 3  # Days to check for spend spike
-    spend_spike_veto_conversion_check: bool = True  # Check if conversions unchanged
-    account_daily_limit: float = 10000.0  # Maximum daily account spend ($10,000)
-    account_daily_limit_action: str = 'pause'  # 'pause', 'reduce_bid', 'alert'
-    account_daily_limit_reduction_factor: float = 0.5  # Reduce bids by 50% if limit exceeded
-    
     # Model Retraining Validation Thresholds (#16)
     min_test_auc_improvement: float = 0.02  # 2% improvement required
     min_test_accuracy_improvement: float = 0.01  # 1% improvement required
@@ -463,6 +454,7 @@ class RuleConfig:
         """Validate configuration values"""
         errors = []
         
+        # Basic metric targets
         if self.acos_target <= 0 or self.acos_target > 1:
             errors.append("ACOS target must be between 0 and 1")
         
@@ -472,11 +464,101 @@ class RuleConfig:
         if self.ctr_minimum < 0 or self.ctr_target < 0:
             errors.append("CTR values must be non-negative")
         
+        # Bid limits
         if self.bid_floor <= 0 or self.bid_cap <= 0 or self.bid_floor >= self.bid_cap:
             errors.append("Bid floor must be positive and less than bid cap")
         
+        if self.bid_max_adjustment <= 0 or self.bid_max_adjustment > 1:
+            errors.append("Bid max adjustment must be between 0 and 1")
+        
+        # Budget limits
         if self.budget_min_daily <= 0 or self.budget_max_daily <= 0 or self.budget_min_daily >= self.budget_max_daily:
             errors.append("Budget min must be positive and less than budget max")
+        
+        # Performance thresholds
+        if self.min_impressions < 0:
+            errors.append("Minimum impressions must be non-negative")
+        
+        if self.min_clicks < 0:
+            errors.append("Minimum clicks must be non-negative")
+        
+        if self.min_conversions < 0:
+            errors.append("Minimum conversions must be non-negative")
+        
+        # Lookback periods
+        if self.performance_lookback_days < 1:
+            errors.append("Performance lookback days must be at least 1")
+        
+        if self.bid_optimization_lookback_days < 1:
+            errors.append("Bid optimization lookback days must be at least 1")
+        
+        if self.trend_analysis_days < 1:
+            errors.append("Trend analysis days must be at least 1")
+        
+        # Re-entry control parameters
+        if self.bid_change_cooldown_days < 0:
+            errors.append("Bid change cooldown days must be non-negative")
+        
+        if self.min_bid_change_threshold < 0 or self.min_bid_change_threshold > 1:
+            errors.append("Min bid change threshold must be between 0 and 1")
+        
+        if self.acos_hysteresis_lower < 0 or self.acos_hysteresis_upper < 0:
+            errors.append("ACOS hysteresis values must be non-negative")
+        
+        if self.acos_hysteresis_lower >= self.acos_hysteresis_upper:
+            errors.append("ACOS hysteresis lower must be less than upper")
+        
+        # Negative keyword thresholds
+        if self.negative_keyword_ctr_threshold < 0:
+            errors.append("Negative keyword CTR threshold must be non-negative")
+        
+        if self.negative_keyword_impression_threshold < 0:
+            errors.append("Negative keyword impression threshold must be non-negative")
+        
+        if self.negative_min_cost_threshold < 0:
+            errors.append("Negative min cost threshold must be non-negative")
+        
+        # Learning loop parameters
+        if self.min_training_samples < 1:
+            errors.append("Min training samples must be at least 1")
+        
+        if self.learning_evaluation_days < 1:
+            errors.append("Learning evaluation days must be at least 1")
+        
+        if self.warm_up_mode_threshold < 0:
+            errors.append("Warm-up mode threshold must be non-negative")
+        
+        # Safety limits
+        if self.max_daily_adjustments < 0:
+            errors.append("Max daily adjustments must be non-negative")
+        
+        if self.cooldown_hours < 0:
+            errors.append("Cooldown hours must be non-negative")
+        
+        # Safety veto parameters
+        if self.spend_spike_veto_threshold < 1:
+            errors.append("Spend spike veto threshold must be >= 1 (100%)")
+        
+        if self.spend_spike_veto_lookback_days < 1:
+            errors.append("Spend spike veto lookback days must be at least 1")
+        
+        if self.account_daily_limit <= 0:
+            errors.append("Account daily limit must be positive")
+        
+        # Bid optimization weights
+        weight_sum = (self.weight_performance + self.weight_intelligence + 
+                     self.weight_seasonality + self.weight_profit)
+        if abs(weight_sum - 1.0) > 0.01:  # Allow small floating point errors
+            errors.append(f"Bid optimization weights must sum to 1.0 (currently {weight_sum:.2f})")
+        
+        # Order-based scaling
+        if self.enable_order_based_scaling:
+            if self.order_tier_1 < 1:
+                errors.append("Order tier 1 must be at least 1")
+            if self.order_tier_2_3 < self.order_tier_1:
+                errors.append("Order tier 2-3 must be >= order tier 1")
+            if self.order_tier_4_plus < self.order_tier_2_3:
+                errors.append("Order tier 4+ must be >= order tier 2-3")
         
         if errors:
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")

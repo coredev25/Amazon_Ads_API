@@ -158,8 +158,19 @@ class AmazonSPAPIClient:
             
         Returns:
             Report ID
+            
+        WARNING: This method uses Amazon Advertising API v2 endpoints which are being
+        deprecated by Amazon. Consider migrating to v3 Async Reporting API or
+        Amazon Marketing Stream for long-term stability.
+        
+        See: https://advertising.amazon.com/API/docs/en-us/reference/migration-guide-v3
         """
         endpoint = f'/v2/sp/reports'
+        
+        self.logger.warning(
+            "Using deprecated Amazon API v2 endpoint '/v2/sp/reports'. "
+            "Amazon is phasing out v2 endpoints. Consider migrating to v3 Async Reporting API."
+        )
         
         payload = {
             'reportDate': report_date.strftime('%Y%m%d'),
@@ -197,7 +208,22 @@ class AmazonSPAPIClient:
         
         self.logger.info(f"Requesting {report_type} report for {report_date.strftime('%Y-%m-%d')}")
         
-        response = self._make_request('POST', endpoint, data=payload)
+        try:
+            response = self._make_request('POST', endpoint, data=payload)
+        except requests.exceptions.HTTPError as e:
+            if e.response and e.response.status_code in [400, 403, 410]:
+                self.logger.error(
+                    f"API v2 endpoint may be deprecated or disabled for your account. "
+                    f"Status: {e.response.status_code}. "
+                    f"Please migrate to Amazon Advertising API v3 or Amazon Marketing Stream. "
+                    f"Response: {e.response.text}"
+                )
+                raise RuntimeError(
+                    f"Amazon API v2 endpoint failure (HTTP {e.response.status_code}). "
+                    f"This endpoint may be deprecated. Please contact support or migrate to v3 API."
+                ) from e
+            raise
+        
         report_id = response.get('reportId')
         
         if not report_id:
@@ -215,6 +241,8 @@ class AmazonSPAPIClient:
             
         Returns:
             Report status information
+            
+        WARNING: Uses deprecated v2 endpoint. Consider migrating to v3 API.
         """
         endpoint = f'/v2/reports/{report_id}'
         return self._make_request('GET', endpoint)
@@ -274,8 +302,11 @@ class AmazonSPAPIClient:
             
         Returns:
             Update response
+            
+        WARNING: Uses deprecated v2 endpoint. Consider migrating to v3 API.
         """
         endpoint = '/v2/sp/keywords'
+        self.logger.debug("Using v2 endpoint for keyword updates")
         
         # Format updates for API
         formatted_updates = []
@@ -302,8 +333,11 @@ class AmazonSPAPIClient:
             
         Returns:
             Update response
+            
+        WARNING: Uses deprecated v2 endpoint. Consider migrating to v3 API.
         """
         endpoint = '/v2/sp/campaigns'
+        self.logger.debug("Using v2 endpoint for campaign updates")
         
         # Format updates for API
         formatted_updates = []

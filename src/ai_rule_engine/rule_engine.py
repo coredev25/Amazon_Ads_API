@@ -3,9 +3,11 @@ Main AI Rule Engine implementation
 """
 
 import logging
+import json
+import time
+import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
-import json
 
 from .config import RuleConfig
 from .database import DatabaseConnector
@@ -16,6 +18,33 @@ from .negative_manager import NegativeKeywordManager
 from .bid_optimizer import BidOptimizationEngine, BudgetOptimizationEngine
 from .learning_loop import LearningLoop, ModelTrainer
 from .telemetry import TelemetryClient
+
+
+def log_debug(session_id: str, run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
+    """Write debug log in NDJSON format"""
+    log_path = '/home/vip/Desktop/Amazon_Ads_API/.cursor/debug.log'
+    try:
+        # Ensure directory exists
+        log_dir = os.path.dirname(log_path)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+        
+        log_entry = {
+            'sessionId': session_id,
+            'runId': run_id,
+            'hypothesisId': hypothesis_id,
+            'location': location,
+            'message': message,
+            'data': data,
+            'timestamp': int(time.time() * 1000)
+        }
+        with open(log_path, 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
+            f.flush()  # Ensure immediate write
+    except Exception as e:
+        # Log to stderr so we can see errors during debugging
+        import sys
+        print(f"DEBUG LOG ERROR: {e}", file=sys.stderr)
 
 
 class AIRuleEngine:
@@ -97,6 +126,9 @@ class AIRuleEngine:
             List of recommendations
         """
         self.logger.info("Starting campaign analysis")
+        # #region agent log
+        log_debug('debug-session', 'run1', 'H2', 'rule_engine.py:analyze_campaigns', 'Method entry', {'campaign_ids': campaign_ids, 'has_db': self.db is not None})
+        # #endregion
         
         # Get campaigns to analyze
         if campaign_ids:
@@ -157,6 +189,31 @@ class AIRuleEngine:
         )
         
         self.logger.info(f"Generated {len(filtered_recs)} recommendations from {len(all_recommendations)} total")
+        
+        # #region agent log
+        log_debug('debug-session', 'run1', 'H2', 'rule_engine.py:analyze_campaigns', 'Recommendations generated', {'filtered_count': len(filtered_recs), 'total_count': len(all_recommendations)})
+        # #endregion
+        
+        # Save all recommendations to database for real-time updates
+        self.logger.info(f"DEBUG: About to call _save_all_recommendations with {len(filtered_recs)} recommendations")
+        # #region agent log
+        log_debug('debug-session', 'run1', 'H3', 'rule_engine.py:analyze_campaigns', 'Before saving recommendations', {'count': len(filtered_recs), 'has_db': self.db is not None})
+        # #endregion
+        try:
+            self.logger.info("DEBUG: Calling _save_all_recommendations now")
+            self._save_all_recommendations(filtered_recs)
+            self.logger.info("DEBUG: _save_all_recommendations call completed")
+            # #region agent log
+            log_debug('debug-session', 'run1', 'H3', 'rule_engine.py:analyze_campaigns', '_save_all_recommendations completed', {'count': len(filtered_recs)})
+            # #endregion
+        except Exception as e:
+            self.logger.error(f"Error in _save_all_recommendations: {e}", exc_info=True)
+            # #region agent log
+            log_debug('debug-session', 'run1', 'H3', 'rule_engine.py:analyze_campaigns', 'Exception in _save_all_recommendations', {'error': str(e), 'error_type': type(e).__name__})
+            # #endregion
+        # #region agent log
+        log_debug('debug-session', 'run1', 'H3', 'rule_engine.py:analyze_campaigns', 'After saving recommendations', {'count': len(filtered_recs)})
+        # #endregion
         
         # Observability: Track recommendations per day (#21)
         self.telemetry.gauge('ai_rule_engine_recommendations', len(filtered_recs))
@@ -347,6 +404,120 @@ class AIRuleEngine:
         key = f"{entity_type}_{entity_id}"
         self.recent_adjustments[key] = datetime.now()
     
+    def _save_all_recommendations(self, recommendations: List[Recommendation]) -> None:
+        """
+        Save all recommendations to database for real-time updates
+        
+        This ensures recommended_value is always up-to-date in the database
+        """
+        self.logger.info(f"DEBUG: _save_all_recommendations called with {len(recommendations) if recommendations else 0} recommendations")
+        # #region agent log
+        log_debug('debug-session', 'run1', 'H4', 'rule_engine.py:_save_all_recommendations', 'Method entry', {'count': len(recommendations) if recommendations else 0, 'has_db': self.db is not None, 'has_save_method': hasattr(self.db, 'save_recommendation') if self.db else False})
+        # #endregion
+        
+        if not recommendations:
+            self.logger.info("DEBUG: No recommendations to save, returning early")
+            self.logger.debug("No recommendations to save")
+            # #region agent log
+            log_debug('debug-session', 'run1', 'H6', 'rule_engine.py:_save_all_recommendations', 'Empty recommendations list', {})
+            # #endregion
+            return
+        
+        self.logger.info(f"Attempting to save {len(recommendations)} recommendations to database")
+        saved_count = 0
+        failed_count = 0
+        for rec in recommendations:
+            try:
+                # Convert Recommendation dataclass to dict format expected by save_recommendation
+                intelligence_signals = rec.metadata.get('intelligence_signals') if rec.metadata else None
+                strategy_id = rec.strategy_id or rec.metadata.get('strategy_id') if rec.metadata else None
+                policy_variant = rec.metadata.get('policy_variant', 'treatment') if rec.metadata else 'treatment'
+                
+                # Generate stable recommendation_id for real-time updates
+                # Use entity_type_entity_id_adjustment_type so we update existing recommendations
+                # This ensures recommended_value is always current
+                recommendation_id = f"{rec.entity_type}_{rec.entity_id}_{rec.adjustment_type}"
+                
+                tracking_data = {
+                    'recommendation_id': recommendation_id,
+                    'entity_type': rec.entity_type,
+                    'entity_id': rec.entity_id,
+                    'adjustment_type': rec.adjustment_type,
+                    'recommended_value': float(rec.recommended_value),
+                    'current_value': float(rec.current_value),
+                    'intelligence_signals': intelligence_signals,
+                    'strategy_id': strategy_id,
+                    'policy_variant': policy_variant,
+                    'timestamp': rec.created_at,
+                    'applied': False,
+                    'metadata': rec.metadata or {}
+                }
+                
+                # Save to database (upsert - update if exists)
+                if not self.db:
+                    self.logger.warning("Database connector not available, cannot save recommendations")
+                    # #region agent log
+                    log_debug('debug-session', 'run1', 'H7', 'rule_engine.py:_save_all_recommendations', 'DB connector not available', {'recommendation_id': recommendation_id})
+                    # #endregion
+                    failed_count += 1
+                    continue
+                
+                if not hasattr(self.db, 'save_recommendation'):
+                    self.logger.warning("Database connector does not have save_recommendation method")
+                    # #region agent log
+                    log_debug('debug-session', 'run1', 'H7', 'rule_engine.py:_save_all_recommendations', 'DB connector missing save_recommendation method', {'recommendation_id': recommendation_id})
+                    # #endregion
+                    failed_count += 1
+                    continue
+                
+                # #region agent log
+                log_debug('debug-session', 'run1', 'H4', 'rule_engine.py:_save_all_recommendations', 'Calling save_recommendation', {'recommendation_id': recommendation_id, 'entity_id': rec.entity_id, 'recommended_value': float(rec.recommended_value), 'current_value': float(rec.current_value)})
+                # #endregion
+                
+                save_result = self.db.save_recommendation(tracking_data)
+                # #region agent log
+                log_debug('debug-session', 'run1', 'H4', 'rule_engine.py:_save_all_recommendations', 'save_recommendation returned', {'recommendation_id': recommendation_id, 'result': save_result})
+                # #endregion
+                
+                if save_result:
+                    saved_count += 1
+                    # #region agent log
+                    log_debug('debug-session', 'run1', 'H4', 'rule_engine.py:_save_all_recommendations', 'Recommendation saved successfully', {'recommendation_id': recommendation_id})
+                    # #endregion
+                else:
+                    failed_count += 1
+                    self.logger.warning(f"Failed to save recommendation {recommendation_id} to database (save_recommendation returned False)")
+                    # #region agent log
+                    log_debug('debug-session', 'run1', 'H4', 'rule_engine.py:_save_all_recommendations', 'Failed to save recommendation', {'recommendation_id': recommendation_id})
+                    # #endregion
+                
+                # Track in learning loop if enabled (for outcome tracking) - regardless of DB save success
+                if self.learning_loop and rec.adjustment_type == 'bid':
+                    try:
+                        self.learning_loop.track_recommendation(
+                            {
+                                'adjustment_type': rec.adjustment_type,
+                                'recommended_value': rec.recommended_value,
+                                'current_value': rec.current_value,
+                                'metadata': rec.metadata or {},
+                                'strategy_id': strategy_id
+                            },
+                            rec.entity_id,
+                            rec.entity_type
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"Error tracking recommendation in learning loop: {e}")
+                                
+            except Exception as e:
+                failed_count += 1
+                self.logger.error(f"Error saving recommendation for {rec.entity_type} {rec.entity_id}: {e}", exc_info=True)
+                # #region agent log
+                log_debug('debug-session', 'run1', 'H4', 'rule_engine.py:_save_all_recommendations', 'Exception saving recommendation', {'entity_id': rec.entity_id, 'error': str(e)})
+                # #endregion
+        
+        # Always log the result, regardless of success/failure
+        self.logger.info(f"Recommendation save summary: {saved_count} saved, {failed_count} failed out of {len(recommendations)} total")
+    
     def get_recommendations_summary(self, recommendations: List[Recommendation]) -> Dict[str, Any]:
         """Get summary of recommendations"""
         return self.recommendation_engine.generate_summary(recommendations)
@@ -475,12 +646,15 @@ class AIRuleEngine:
             
             for keyword in keywords:
                 keyword_id = keyword['keyword_id']
-                performance = self.db.get_keyword_performance(
-                    keyword_id, self.config.performance_lookback_days
-                )
+                perf_7d = self.db.get_keyword_performance(keyword_id, 7)
+                perf_14d = self.db.get_keyword_performance(keyword_id, 14)
+                perf_30d = self.db.get_keyword_performance(keyword_id, 30)
+                
+                # Pass a list of lists as expected by identify_negative_candidates
+                performance_windows = [perf_7d, perf_14d, perf_30d]
                 
                 candidate = self.negative_manager.identify_negative_candidates(
-                    keyword, performance
+                    keyword, performance_windows
                 )
                 
                 if candidate:

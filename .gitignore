@@ -13,6 +13,11 @@ reports/
 # Keep the example CA certificate, but ignore custom ones
 !ca-certificate.pem
 
+# Build folder
+.next
+.node_modules/
+.node_modules/
+
 venv/
 # Python
 __pycache__/

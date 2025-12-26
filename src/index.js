@@ -82,6 +82,18 @@ app.post('/api/sync/keywords', async (req, res) => {
   }
 });
 
+// Sync product ads only
+app.post('/api/sync/product-ads', async (req, res) => {
+  try {
+    logger.info('Product ads sync triggered via API');
+    const count = await syncService.syncProductAds();
+    res.json({ status: 'success', recordsSynced: count });
+  } catch (error) {
+    logger.error('Error syncing product ads:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Export reports
 app.post('/api/reports/export', async (req, res) => {
   try {

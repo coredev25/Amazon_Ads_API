@@ -27,12 +27,35 @@ from .negative_manager import NegativeKeywordManager, NegativeKeywordCandidate
 from .bid_optimizer import BidOptimizationEngine, BudgetOptimizationEngine
 from .learning_loop import LearningLoop, ModelTrainer
 from .re_entry_control import ReEntryController, BidChangeTracker, ReEntryControlResult, OscillationDetectionResult
-# Advanced Features (#26-30)
-from .advanced_models import TimeSeriesModelTrainer, CausalInferenceModel
-from .bandit_models import ThompsonSamplingBandit, UCBBandit, CounterfactualEvaluator
-from .portfolio_learning import PortfolioLearningEngine, PrivacyController
-from .explainability import ModelExplainer
-from .simulator import HistoricalSimulator
+# Advanced Features (#26-30) - Import conditionally
+try:
+    from .advanced_models import TimeSeriesModelTrainer, CausalInferenceModel
+except ImportError:
+    TimeSeriesModelTrainer = None
+    CausalInferenceModel = None
+
+try:
+    from .bandit_models import ThompsonSamplingBandit, UCBBandit, CounterfactualEvaluator
+except ImportError:
+    ThompsonSamplingBandit = None
+    UCBBandit = None
+    CounterfactualEvaluator = None
+
+try:
+    from .portfolio_learning import PortfolioLearningEngine, PrivacyController
+except ImportError:
+    PortfolioLearningEngine = None
+    PrivacyController = None
+
+try:
+    from .explainability import ModelExplainer
+except ImportError:
+    ModelExplainer = None
+
+try:
+    from .simulator import HistoricalSimulator
+except ImportError:
+    HistoricalSimulator = None
 
 __version__ = "2.2.0"
 __all__ = [

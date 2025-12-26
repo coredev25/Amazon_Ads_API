@@ -9,7 +9,11 @@
     "export": "node src/export.js",
     "setup-db": "node src/database/setup.js",
     "dev": "nodemon src/index.js",
-    "dashboard": "streamlit run dashboard/app.py",
+    "dashboard": "bash scripts/start_dashboard.sh",
+    "dashboard:setup": "bash scripts/setup_dashboard.sh",
+    "dashboard:api": "cd dashboard && python -m uvicorn api.main:app --reload --port 8000",
+    "dashboard:frontend": "cd dashboard/frontend && npm run dev",
+    "streamlit": "streamlit run dashboard/app.py",
     "test": "npm run test:api && npm run test:sync",
     "test:api": "node tests/test_api.js",
     "test:sync": "node tests/test_sync.js"

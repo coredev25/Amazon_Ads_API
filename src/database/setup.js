@@ -13,6 +13,15 @@ async function setupDatabase() {
       throw new Error('Failed to connect to database');
     }
 
+    // Try to rollback any existing aborted transaction
+    try {
+      await db.query('ROLLBACK');
+      logger.debug('Rolled back any existing transaction');
+    } catch (err) {
+      // Ignore error if no transaction was active
+      logger.debug('No existing transaction to rollback');
+    }
+
     // Read and execute schema
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schema = fs.readFileSync(schemaPath, 'utf8');
@@ -65,12 +74,25 @@ async function setupDatabase() {
       if (!statement) continue;
 
       try {
-        // Skip comments and empty statements
-        if (statement.startsWith('--') || statement.length === 0) {
+        // Skip standalone comment lines and empty statements
+        // But don't skip multi-line statements that contain SQL commands
+        const trimmedStatement = statement.trim();
+        if (trimmedStatement.length === 0) {
           continue;
         }
+        
+        // Skip only if it's ONLY a comment (starts with -- and no other SQL)
+        const lines = trimmedStatement.split('\n');
+        const hasSQL = lines.some(line => {
+          const trimmedLine = line.trim();
+          return trimmedLine.length > 0 && !trimmedLine.startsWith('--');
+        });
+        
+        if (!hasSQL) {
+          continue; // Skip comment-only statements
+        }
 
-        await db.query(statement);
+        await db.query(trimmedStatement);
         successCount++;
         
         // Log progress for large schemas
