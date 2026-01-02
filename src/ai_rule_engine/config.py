@@ -278,7 +278,20 @@ class RuleConfig:
         try:
             with open(config_path, 'r') as f:
                 config_data = json.load(f)
-            return cls(**config_data)
+            
+            # Filter out unknown fields that don't exist in RuleConfig
+            # Get all valid field names from the dataclass
+            valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+            
+            # Filter config_data to only include valid fields
+            filtered_config = {k: v for k, v in config_data.items() if k in valid_fields}
+            
+            # Warn about ignored fields
+            ignored_fields = set(config_data.keys()) - valid_fields
+            if ignored_fields:
+                print(f"Warning: Ignoring unknown config fields: {', '.join(sorted(ignored_fields))}")
+            
+            return cls(**filtered_config)
         except FileNotFoundError:
             print(f"Config file {config_path} not found, using defaults")
             return cls()
@@ -286,9 +299,116 @@ class RuleConfig:
             print(f"Error loading config: {e}, using defaults")
             return cls()
     
-    def to_file(self, config_path: str) -> None:
-        """Save configuration to JSON file"""
-        config_dict = {
+    @classmethod
+    def from_database(cls, db_connector, fallback_to_file: bool = False, config_path: Optional[str] = None) -> 'RuleConfig':
+        """
+        Load configuration from database
+        
+        Args:
+            db_connector: DatabaseConnector instance
+            fallback_to_file: If True, fall back to file if database load fails
+            config_path: Path to config file for fallback
+            
+        Returns:
+            RuleConfig instance
+        """
+        try:
+            import psycopg2.extras
+            import psycopg2.errors
+            
+            query = """
+            SELECT setting_name, setting_value, value_type
+            FROM ai_rule_engine_settings
+            WHERE is_active = TRUE
+            """
+            
+            config_data = {}
+            with db_connector.get_connection() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute(query)
+                    rows = cursor.fetchall()
+                    
+                    if not rows:
+                        # No settings in database, try fallback
+                        if fallback_to_file and config_path:
+                            print("No settings found in database, falling back to file")
+                            return cls.from_file(config_path)
+                        print("No settings found in database, using defaults")
+                        return cls()
+                    
+                    # Get valid field names to filter unknown settings
+                    valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+                    
+                    # Convert database rows to config dict
+                    for row in rows:
+                        setting_name = row['setting_name']
+                        
+                        # Skip unknown fields
+                        if setting_name not in valid_fields:
+                            continue
+                        
+                        setting_value = row['setting_value']  # JSONB value
+                        value_type = row['value_type']
+                        
+                        # Convert JSONB to Python type
+                        # JSONB values are already parsed by psycopg2
+                        if value_type == 'number':
+                            # Try to determine if it's int or float
+                            if isinstance(setting_value, (int, float)):
+                                config_data[setting_name] = setting_value
+                            else:
+                                # Fallback: try to parse
+                                try:
+                                    config_data[setting_name] = float(setting_value) if '.' in str(setting_value) else int(setting_value)
+                                except (ValueError, TypeError):
+                                    config_data[setting_name] = setting_value
+                        elif value_type == 'boolean':
+                            config_data[setting_name] = bool(setting_value)
+                        elif value_type == 'string':
+                            config_data[setting_name] = str(setting_value)
+                        elif value_type == 'object':
+                            # setting_value is already a dict from JSONB
+                            if isinstance(setting_value, dict):
+                                config_data[setting_name] = setting_value
+                            elif isinstance(setting_value, str):
+                                config_data[setting_name] = json.loads(setting_value)
+                            else:
+                                config_data[setting_name] = setting_value
+                        elif value_type == 'array':
+                            if isinstance(setting_value, list):
+                                config_data[setting_name] = setting_value
+                            elif isinstance(setting_value, str):
+                                config_data[setting_name] = json.loads(setting_value)
+                            else:
+                                config_data[setting_name] = setting_value
+                        else:
+                            config_data[setting_name] = setting_value
+            
+            # Create config instance, using defaults for missing fields
+            return cls(**config_data)
+            
+        except psycopg2.errors.UndefinedTable:
+            # Table doesn't exist - this is expected if schema hasn't been created
+            print("Database table 'ai_rule_engine_settings' does not exist. Run 'python3 scripts/setup_ai_database_config.py' to create it.")
+            if fallback_to_file and config_path:
+                print(f"Falling back to file: {config_path}")
+                return cls.from_file(config_path)
+            print("Using default configuration")
+            return cls()
+        except Exception as e:
+            print(f"Error loading config from database: {e}")
+            import traceback
+            traceback.print_exc()
+            if fallback_to_file and config_path:
+                print(f"Falling back to file: {config_path}")
+                return cls.from_file(config_path)
+            print("Using default configuration")
+            return cls()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert configuration to dictionary"""
+        # Use the same structure as to_file method
+        return {
             'acos_target': self.acos_target,
             'acos_tolerance': self.acos_tolerance,
             'acos_bid_adjustment_factor': self.acos_bid_adjustment_factor,
@@ -330,7 +450,6 @@ class RuleConfig:
             'negative_keyword_impression_threshold': self.negative_keyword_impression_threshold,
             'max_daily_adjustments': self.max_daily_adjustments,
             'cooldown_hours': self.cooldown_hours,
-            # Re-entry Control
             'bid_change_cooldown_days': self.bid_change_cooldown_days,
             'min_bid_change_threshold': self.min_bid_change_threshold,
             'acos_stability_window': self.acos_stability_window,
@@ -347,7 +466,6 @@ class RuleConfig:
             'enable_oscillation_detection': self.enable_oscillation_detection,
             'oscillation_lookback_days': self.oscillation_lookback_days,
             'oscillation_direction_change_threshold': self.oscillation_direction_change_threshold,
-            # Intelligence Engines
             'high_performer_roas': self.high_performer_roas,
             'long_tail_min_words': self.long_tail_min_words,
             'target_impression_share': self.target_impression_share,
@@ -356,7 +474,6 @@ class RuleConfig:
             'min_profit_threshold': self.min_profit_threshold,
             'negative_zero_conversion_threshold': self.negative_zero_conversion_threshold,
             'negative_high_cost_threshold': self.negative_high_cost_threshold,
-            # Smart Negative Keyword Manager
             'negative_short_window_days': self.negative_short_window_days,
             'negative_medium_window_days': self.negative_medium_window_days,
             'negative_long_window_days': self.negative_long_window_days,
@@ -374,13 +491,13 @@ class RuleConfig:
             're_evaluation_interval_days': self.re_evaluation_interval_days,
             'min_conversion_probability': self.min_conversion_probability,
             'product_price_tier': self.product_price_tier,
-            # Bid Optimization
+            'product_bid_caps': self.product_bid_caps,
+            'category_bid_caps': self.category_bid_caps,
             'weight_performance': self.weight_performance,
             'weight_intelligence': self.weight_intelligence,
             'weight_seasonality': self.weight_seasonality,
             'weight_profit': self.weight_profit,
             'aggressive_scale_roas': self.aggressive_scale_roas,
-            # Spend/Clicks Safeguard
             'enable_spend_safeguard': self.enable_spend_safeguard,
             'enable_clicks_safeguard': self.enable_clicks_safeguard,
             'spend_spike_threshold': self.spend_spike_threshold,
@@ -390,7 +507,13 @@ class RuleConfig:
             'safeguard_bid_reduction_factor': self.safeguard_bid_reduction_factor,
             'min_spend_for_safeguard': self.min_spend_for_safeguard,
             'min_clicks_for_safeguard': self.min_clicks_for_safeguard,
-            # Order-Based Scaling
+            'enable_comprehensive_safety_veto': self.enable_comprehensive_safety_veto,
+            'spend_spike_veto_threshold': self.spend_spike_veto_threshold,
+            'spend_spike_veto_lookback_days': self.spend_spike_veto_lookback_days,
+            'spend_spike_veto_conversion_check': self.spend_spike_veto_conversion_check,
+            'account_daily_limit': self.account_daily_limit,
+            'account_daily_limit_action': self.account_daily_limit_action,
+            'account_daily_limit_reduction_factor': self.account_daily_limit_reduction_factor,
             'enable_order_based_scaling': self.enable_order_based_scaling,
             'order_tier_1': self.order_tier_1,
             'order_tier_2_3': self.order_tier_2_3,
@@ -398,7 +521,6 @@ class RuleConfig:
             'order_tier_1_adjustment': self.order_tier_1_adjustment,
             'order_tier_2_3_adjustment': self.order_tier_2_3_adjustment,
             'order_tier_4_plus_adjustment': self.order_tier_4_plus_adjustment,
-            # Spend-Based No Sale Logic
             'enable_spend_no_sale_logic': self.enable_spend_no_sale_logic,
             'no_sale_spend_tier_1': self.no_sale_spend_tier_1,
             'no_sale_spend_tier_2': self.no_sale_spend_tier_2,
@@ -406,7 +528,6 @@ class RuleConfig:
             'no_sale_reduction_tier_1': self.no_sale_reduction_tier_1,
             'no_sale_reduction_tier_2': self.no_sale_reduction_tier_2,
             'no_sale_reduction_tier_3': self.no_sale_reduction_tier_3,
-            # CTR Combined Logic
             'ctr_critical_threshold': self.ctr_critical_threshold,
             'enable_ctr_combined_logic': self.enable_ctr_combined_logic,
             'ctr_low_spend_threshold': self.ctr_low_spend_threshold,
@@ -416,37 +537,171 @@ class RuleConfig:
             'impressions_high_threshold': self.impressions_high_threshold,
             'clicks_low_threshold': self.clicks_low_threshold,
             'impressions_clicks_adjustment': self.impressions_clicks_adjustment,
-            # ACOS Trend Comparison
             'enable_acos_trend_comparison': self.enable_acos_trend_comparison,
             'acos_trend_decline_threshold': self.acos_trend_decline_threshold,
             'acos_trend_improvement_threshold': self.acos_trend_improvement_threshold,
             'acos_trend_decline_adjustment': self.acos_trend_decline_adjustment,
             'acos_trend_improvement_adjustment': self.acos_trend_improvement_adjustment,
             'skip_on_acos_decline': self.skip_on_acos_decline,
-            # Low Data Zone
             'enable_low_data_zone': self.enable_low_data_zone,
             'low_data_spend_threshold': self.low_data_spend_threshold,
             'low_data_clicks_threshold': self.low_data_clicks_threshold,
             'low_data_zone_adjustment_limit': self.low_data_zone_adjustment_limit,
-            # New Keyword Logic
             'enable_new_keyword_logic': self.enable_new_keyword_logic,
             'new_keyword_age_days': self.new_keyword_age_days,
             'new_keyword_adjustment_limit': self.new_keyword_adjustment_limit,
             'new_keyword_cooldown_days': self.new_keyword_cooldown_days,
-            # Learning Loop
             'learning_success_threshold': self.learning_success_threshold,
             'learning_failure_threshold': self.learning_failure_threshold,
             'learning_evaluation_days': self.learning_evaluation_days,
             'min_training_samples': self.min_training_samples,
+            'min_spend_for_label': self.min_spend_for_label,
+            'min_clicks_for_label': self.min_clicks_for_label,
+            'learning_policy_holdout_pct': self.learning_policy_holdout_pct,
+            'enable_probability_calibration': self.enable_probability_calibration,
             'warm_up_mode_threshold': self.warm_up_mode_threshold,
             'enable_warm_up_mode': self.enable_warm_up_mode,
-            # Feature Flags
+            'min_test_auc_improvement': self.min_test_auc_improvement,
+            'min_test_accuracy_improvement': self.min_test_accuracy_improvement,
+            'min_test_auc': self.min_test_auc,
+            'min_test_accuracy': self.min_test_accuracy,
+            'max_model_versions': self.max_model_versions,
+            'enable_hierarchical_models': self.enable_hierarchical_models,
+            'enable_time_series_models': self.enable_time_series_models,
+            'time_series_sequence_length': self.time_series_sequence_length,
+            'use_gpu': self.use_gpu,
+            'enable_causal_inference': self.enable_causal_inference,
+            'enable_multi_armed_bandits': self.enable_multi_armed_bandits,
+            'bandit_algorithm': self.bandit_algorithm,
+            'bandit_alpha_prior': self.bandit_alpha_prior,
+            'bandit_beta_prior': self.bandit_beta_prior,
+            'ucb_exploration_constant': self.ucb_exploration_constant,
+            'enable_counterfactual_evaluation': self.enable_counterfactual_evaluation,
+            'enable_portfolio_learning': self.enable_portfolio_learning,
+            'enable_differential_privacy': self.enable_differential_privacy,
+            'differential_privacy_epsilon': self.differential_privacy_epsilon,
+            'min_accounts_for_pooling': self.min_accounts_for_pooling,
+            'privacy_salt': self.privacy_salt,
+            'enable_explainability': self.enable_explainability,
+            'explainability_top_k_features': self.explainability_top_k_features,
+            'enable_simulator': self.enable_simulator,
+            'simulation_lookback_days': self.simulation_lookback_days,
             'enable_intelligence_engines': self.enable_intelligence_engines,
             'enable_learning_loop': self.enable_learning_loop,
             'enable_advanced_bid_optimization': self.enable_advanced_bid_optimization,
-            'enable_profit_optimization': self.enable_profit_optimization
+            'enable_profit_optimization': self.enable_profit_optimization,
+            'enable_telemetry': self.enable_telemetry,
+            'telemetry_exporter': self.telemetry_exporter
         }
+    
+    def to_database(self, db_connector, created_by: str = 'system') -> bool:
+        """
+        Save configuration to database
         
+        Args:
+            db_connector: DatabaseConnector instance
+            created_by: Username/system identifier for audit trail
+            
+        Returns:
+            True if successful
+        """
+        try:
+            config_dict = self.to_dict()
+            
+            # Category mapping for settings
+            category_map = {
+                'acos': ['acos_'],
+                'roas': ['roas_'],
+                'ctr': ['ctr_'],
+                'bid': ['bid_', 'bid_floor', 'bid_cap'],
+                'budget': ['budget_'],
+                'learning': ['learning_', 'min_training', 'warm_up', 'min_test_', 'max_model_'],
+                'optimization': ['weight_', 'aggressive_', 'enable_advanced_bid_optimization'],
+                'negative': ['negative_', 'use_temporary_holds', 'temporary_hold'],
+                'safety': ['enable_spend_safeguard', 'enable_clicks_safeguard', 'spend_spike', 
+                          'clicks_spike', 'safeguard_', 'enable_comprehensive_safety_veto',
+                          'account_daily_limit'],
+                'general': []  # Default category
+            }
+            
+            def get_category(setting_name: str) -> str:
+                """Determine category for a setting"""
+                for category, prefixes in category_map.items():
+                    if category == 'general':
+                        continue
+                    for prefix in prefixes:
+                        if setting_name.startswith(prefix):
+                            return category
+                return 'general'
+            
+            def get_value_type(value: Any) -> str:
+                """Determine value type for database storage"""
+                if isinstance(value, bool):
+                    return 'boolean'
+                elif isinstance(value, int):
+                    return 'number'
+                elif isinstance(value, float):
+                    return 'number'
+                elif isinstance(value, str):
+                    return 'string'
+                elif isinstance(value, (dict, list)):
+                    return 'object' if isinstance(value, dict) else 'array'
+                else:
+                    return 'string'
+            
+            query = """
+            INSERT INTO ai_rule_engine_settings (
+                setting_name, setting_value, value_type, category, 
+                description, is_active, created_by, updated_by
+            ) VALUES (
+                %s, %s::jsonb, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (setting_name) DO UPDATE SET
+                setting_value = EXCLUDED.setting_value,
+                value_type = EXCLUDED.value_type,
+                category = EXCLUDED.category,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = CURRENT_TIMESTAMP
+            """
+            
+            with db_connector.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    for setting_name, setting_value in config_dict.items():
+                        value_type = get_value_type(setting_value)
+                        category = get_category(setting_name)
+                        
+                        # Convert value to JSON-compatible format
+                        if value_type == 'object' or value_type == 'array':
+                            json_value = json.dumps(setting_value)
+                        else:
+                            json_value = json.dumps(setting_value)
+                        
+                        description = f"Configuration setting: {setting_name}"
+                        
+                        cursor.execute(query, (
+                            setting_name,
+                            json_value,
+                            value_type,
+                            category,
+                            description,
+                            True,  # is_active
+                            created_by,
+                            created_by
+                        ))
+                    
+                    conn.commit()
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error saving config to database: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def to_file(self, config_path: str) -> None:
+        """Save configuration to JSON file"""
+        config_dict = self.to_dict()
         with open(config_path, 'w') as f:
             json.dump(config_dict, f, indent=2)
     

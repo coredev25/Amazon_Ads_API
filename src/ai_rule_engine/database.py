@@ -7,6 +7,23 @@ import psycopg2.extras
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 import logging
+import os
+from pathlib import Path
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    # Try to find .env file in project root (2 levels up from this file)
+    project_root = Path(__file__).parent.parent.parent
+    env_path = project_root / '.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+    else:
+        # Fallback: try current directory
+        load_dotenv()
+except ImportError:
+    # python-dotenv not installed, will use system environment variables only
+    pass
 
 
 class DatabaseConnector:
@@ -26,7 +43,6 @@ class DatabaseConnector:
             self.connection_params = None
         else:
             # Build connection parameters from individual environment variables
-            import os
             db_host = os.getenv('DB_HOST', 'localhost')
             db_port = os.getenv('DB_PORT', '5432')
             db_name = os.getenv('DB_NAME', 'amazon_ads')

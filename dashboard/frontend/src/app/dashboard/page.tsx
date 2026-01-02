@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import MetricCard from '@/components/MetricCard';
 import { SpendSalesChart, HealthGauge } from '@/components/Charts';
+import EngineStatus from '@/components/EngineStatus';
 import { fetchOverviewMetrics, fetchTrends, fetchAlerts } from '@/utils/api';
 import {
   formatCurrency,
@@ -203,6 +204,11 @@ export default function CommandCenter() {
           icon={<Zap className="w-5 h-5" />}
           accentColor="#FF9900"
         />
+      </div>
+
+      {/* Engine Status */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <EngineStatus />
       </div>
 
       {/* Main Content Grid */}

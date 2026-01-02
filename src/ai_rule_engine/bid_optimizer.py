@@ -373,20 +373,10 @@ class BidOptimizationEngine:
                     f"{trend_result['trend']} ({trend_result['current_acos']:.2%} vs {trend_result['previous_acos']:.2%}) = {trend_adjustment:+.0%}"
                 )
         
-        # 6. SPEND-BASED NO SALE LOGIC: Check for no sales with tiered spend thresholds
-        if self.enable_spend_no_sale_logic:
-            no_sale_result = self._check_spend_no_sale(filtered_performance_data, entity_id, entity_type)
-            if no_sale_result['triggered']:
-                reduction_factor = no_sale_result['reduction_factor']
-                proposals.append(AdjustmentProposal(
-                    source='no_sale_spend',
-                    percentage=-reduction_factor,
-                    priority='high',
-                    confidence=0.95,
-                    reason=f"{no_sale_result['reason']} (-{reduction_factor:.0%})"
-                ))
+        # 6. SPEND-BASED NO SALE LOGIC: Now handled directly in _calculate_performance_adjustment
+        # No separate check needed - the new logic integrates no-sale scenarios
         
-        # Calculate performance-based adjustment (with smoothing and all new logic)
+        # Calculate performance-based adjustment (with new strategy matrix logic)
         performance_adjustment = self._calculate_performance_adjustment(
             filtered_performance_data, low_data_result, entity_id, entity_type
         )
@@ -804,148 +794,50 @@ class BidOptimizationEngine:
                                         low_data_result: Dict[str, Any] = None,
                                         entity_id: int = 0, entity_type: str = 'keyword') -> float:
         """
-        Calculate bid adjustment based on performance metrics with smoothing,
-        granular ACOS tiers, order-based scaling, and CTR combined logic
+        Calculate bid adjustment based on performance metrics with new strategy matrix:
+        - ACOS-based rank zones (A+, A, B, C, D, E)
+        - Order-based bid adjustment scaling
+        - No Sale scenarios (NS-1 through NS-6)
         """
         if not performance_data:
             return 0.0
         
         low_data_result = low_data_result or {'in_low_data_zone': False}
         
-        # 3. SMOOTHING: Apply smoothing to performance metrics
-        if self.enable_performance_smoothing and len(performance_data) >= self.min_data_points_for_smoothing:
-            smoothed_metrics = self._apply_smoothing(performance_data)
-            current_acos = smoothed_metrics.get('acos', 0)
-            current_roas = smoothed_metrics.get('roas', 0)
-            current_ctr = smoothed_metrics.get('ctr', 0)
-        else:
-            # Fallback to simple aggregation if smoothing not enabled or insufficient data
-            total_cost = sum(float(record.get('cost', 0)) for record in performance_data)
-            total_sales = sum(self._get_daily_sales(record) for record in performance_data)
-            total_impressions = sum(float(record.get('impressions', 0)) for record in performance_data)
-            total_clicks = sum(float(record.get('clicks', 0)) for record in performance_data)
-            
-            if total_cost == 0:
-                return 0.0
-            
-            # FIX #4: Use float('inf') for ACOS when sales == 0 instead of 0
-            current_acos = (total_cost / total_sales) if total_sales > 0 else float('inf')
-            current_roas = (total_sales / total_cost) if total_cost > 0 else 0
-            current_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
-        
-        # FIX #4: Handle float('inf') ACOS - treat as very high ACOS requiring reduction
-        if current_acos == float('inf'):
-            # Infinite ACOS means cost > 0 but sales == 0 - should reduce bid
-            return -0.30  # Reduce by 30% for zero sales with cost
-        
-        if current_acos == 0 and current_roas == 0:
-            return 0.0
-        
-        # Get conversion count for order-based scaling
+        # Calculate aggregated metrics
+        total_cost = sum(float(record.get('cost', 0)) for record in performance_data)
+        total_sales = sum(self._get_daily_sales(record) for record in performance_data)
+        total_impressions = sum(float(record.get('impressions', 0)) for record in performance_data)
+        total_clicks = sum(float(record.get('clicks', 0)) for record in performance_data)
         total_conversions = sum(int(record.get('attributed_conversions_7d', 0)) for record in performance_data)
-        total_spend = sum(float(record.get('cost', 0)) for record in performance_data)
         
-        adjustment = 0.0
+        # Calculate current metrics
+        current_acos = (total_cost / total_sales) if total_sales > 0 else float('inf')
+        current_roas = (total_sales / total_cost) if total_cost > 0 else 0
+        current_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
         
-        # CLIENT-SPECIFIC ACOS RANGE LOGIC WITH ORDER-BASED SCALING
-        # Thresholds are stored as percentages of the target ACOS to keep behavior consistent
-        if current_acos > 0 and current_acos != float('inf'):
-            acos_ratio = current_acos / self.target_acos if self.target_acos > 0 else 0
-            
-            if current_acos >= self.acos_tier_very_high:
-                # Critical Overspend: 200%+ of target
-                adjustment -= 0.30
-                self.logger.debug(f"Critical Overspend ({acos_ratio:.0%} of target): {current_acos:.2%} = -30%")
-            
-            elif self.acos_tier_high <= current_acos < self.acos_tier_very_high:
-                # Severe Overspend: 135%-200% of target
-                adjustment -= 0.25
-                self.logger.debug(f"Severe Overspend ({acos_ratio:.0%} of target): {current_acos:.2%} = -25%")
-            
-            elif self.acos_tier_medium_high <= current_acos < self.acos_tier_high:
-                # Moderately High: 120%-135% of target
-                adjustment -= 0.15
-                self.logger.debug(f"Moderately High ACOS ({acos_ratio:.0%} of target): {current_acos:.2%} = -15%")
-            
-            elif self.acos_tier_target <= current_acos < self.acos_tier_medium:
-                # Slightly Above Target: 100%-119% of target
-                adjustment -= 0.05
-                self.logger.debug(f"Slightly Above Target ({acos_ratio:.0%} of target): {current_acos:.2%} = -5%")
-            
-            elif self.acos_tier_good <= current_acos < self.acos_tier_target:
-                # At Target: 85%-100% of target
-                self.logger.debug(f"At Target ({acos_ratio:.0%} of target): {current_acos:.2%} = Hold")
-            
-            elif self.acos_tier_low <= current_acos < self.acos_tier_good:
-                # Optimal Zone: 70%-85% of target
-                if total_conversions == 1:
-                    pass  # Hold (0%)
-                elif 2 <= total_conversions <= 3:
-                    adjustment += 0.05
-                else:
-                    adjustment += 0.10
-                self.logger.debug(f"Optimal Zone ({acos_ratio:.0%} of target): {current_acos:.2%} with {total_conversions} orders = {adjustment:+.0%}")
-            
-            elif self.acos_tier_very_low <= current_acos < self.acos_tier_low:
-                # High Efficiency Zone: 45%-70% of target
-                if total_conversions == 1:
-                    adjustment += 0.05
-                elif 2 <= total_conversions <= 3:
-                    adjustment += 0.10
-                else:
-                    adjustment += 0.20
-                self.logger.debug(f"High Efficiency Zone ({acos_ratio:.0%} of target): {current_acos:.2%} with {total_conversions} orders = {adjustment:+.0%}")
-            
-            elif self.acos_tier_excellent <= current_acos < self.acos_tier_very_low:
-                # Ultra Profitable Zone: 30%-45% of target
-                if total_conversions == 1:
-                    adjustment += 0.10
-                elif 2 <= total_conversions <= 3:
-                    adjustment += 0.20
-                else:
-                    adjustment += 0.30
-                self.logger.debug(f"Ultra Profitable Zone ({acos_ratio:.0%} of target): {current_acos:.2%} with {total_conversions} orders = {adjustment:+.0%}")
-            
-            else:
-                # Very Low ACOS: <30% of target
-                if total_conversions == 1:
-                    adjustment += 0.15
-                elif 2 <= total_conversions <= 3:
-                    adjustment += 0.25
-                else:
-                    adjustment += 0.35
-                self.logger.debug(f"Very Low ACOS ({acos_ratio:.0%} of target): {current_acos:.2%} with {total_conversions} orders = {adjustment:+.0%}")
+        # PRIORITY 1: Check for No Sale scenarios (NS-1 through NS-6)
+        # These override ACOS-based logic when there are no sales
+        if total_sales == 0:
+            return self._handle_no_sale_scenarios(
+                total_impressions, total_clicks, total_cost, entity_id, entity_type
+            )
         
-        # IMPRESSIONS >500 & CLICKS <3 -- +5-10%
-        if self.enable_impressions_clicks_logic:
-            total_impressions = sum(int(record.get('impressions', 0)) for record in performance_data)
-            if total_impressions > self.impressions_high_threshold and total_clicks < self.clicks_low_threshold:
-                adjustment += self.impressions_clicks_adjustment
-                self.logger.debug(f"Impressions/Clicks rule: {total_impressions} impressions, {total_clicks} clicks = +{self.impressions_clicks_adjustment:.0%}")
+        # PRIORITY 2: ACOS-based rank zones with order-based scaling
+        # Determine ACOS rank zone
+        acos_rank = self._determine_acos_rank(current_acos)
         
-        # CTR COMBINED LOGIC: CTR <0.2% & Spend >$10 -- -20%
-        if self.enable_ctr_combined_logic and current_ctr < self.ctr_critical_threshold:
-            if total_spend >= self.ctr_low_spend_threshold:
-                # Low CTR + High Spend = reduce bid by -20%
-                adjustment -= self.ctr_low_spend_reduction
-                self.logger.debug(f"CTR+Spend combined: CTR {current_ctr:.2f}% with ${total_spend:.2f} spend = -{self.ctr_low_spend_reduction:.0%}")
-            elif total_conversions < self.ctr_low_order_threshold:
-                # Low CTR + Low Orders = reduce bid
-                adjustment -= 0.10
-                self.logger.debug(f"CTR+Order combined: CTR {current_ctr:.2f}% with {total_conversions} conversions = -10%")
+        # Get bid adjustment multiplier based on rank and order count
+        bid_multiplier = self._get_bid_multiplier_for_rank_and_orders(acos_rank, total_conversions)
         
-        # ROAS-based adjustment
-        if current_roas > 0:
-            roas_deviation = (current_roas - self.target_roas) / self.target_roas
-            # If ROAS too low, reduce bid (negative adjustment)
-            # If ROAS too high, increase bid (positive adjustment)
-            adjustment += roas_deviation * 0.15
+        # Convert multiplier to adjustment percentage
+        # Multiplier 1.15 = +15% adjustment, 0.85 = -15% adjustment
+        adjustment = bid_multiplier - 1.0
         
-        # CTR-based adjustment (only if not already handled by combined logic)
-        if current_ctr > 0 and not (self.enable_ctr_combined_logic and current_ctr < self.ctr_critical_threshold):
-            ctr_deviation = (current_ctr - self.target_ctr) / self.target_ctr
-            # If CTR too low, might need to increase bid for visibility
-            adjustment += ctr_deviation * 0.10
+        self.logger.debug(
+            f"ACOS Rank {acos_rank}: ACOS={current_acos:.2%}, Orders={total_conversions}, "
+            f"Multiplier={bid_multiplier:.2f}, Adjustment={adjustment:+.1%}"
+        )
         
         # Apply low data zone limit
         if low_data_result.get('in_low_data_zone', False):
@@ -953,8 +845,151 @@ class BidOptimizationEngine:
                            min(self.low_data_zone_adjustment_limit, adjustment))
             self.logger.debug(f"Low data zone: limiting adjustment to {self.low_data_zone_adjustment_limit:.0%}")
         
-        # Cap adjustment (general limit)
-        return max(-0.30, min(0.30, adjustment))
+        # Cap adjustment to reasonable limits
+        return max(-0.30, min(0.35, adjustment))
+    
+    def _handle_no_sale_scenarios(self, total_impressions: int, total_clicks: int, 
+                                   total_spend: float, entity_id: int, entity_type: str) -> float:
+        """
+        Handle No Sale scenarios (NS-1 through NS-6) based on the strategy matrix
+        
+        Returns bid adjustment as a percentage (e.g., 0.15 for +15%, -0.30 for -30%)
+        """
+        # NS-1: No Clicks / No Activity (Impressions < 500)
+        if total_impressions <= self.config.get('ns1_no_clicks_no_activity_impr_max', 500):
+            multiplier = self.config.get('ns1_bid_adjustment', 1.15)
+            adjustment = multiplier - 1.0
+            self.logger.info(f"NS-1 No Clicks/No Activity: impressions={total_impressions}, adjustment={adjustment:+.1%}")
+            return adjustment
+        
+        # NS-2: Low Data Zone (Spend < $5 OR Clicks < 10)
+        if total_spend < self.config.get('ns2_low_data_zone_spend_max', 5.0) or \
+           total_clicks < self.config.get('ns2_low_data_zone_clicks_max', 10):
+            multiplier = self.config.get('ns2_bid_adjustment', 1.10)
+            adjustment = multiplier - 1.0
+            self.logger.info(f"NS-2 Low Data Zone: spend=${total_spend:.2f}, clicks={total_clicks}, adjustment={adjustment:+.1%}")
+            return adjustment
+        
+        # NS-3: High Spend, Few Clicks, No Orders (Spend $5-$10, Clicks < 3)
+        if (self.config.get('ns3_high_spend_few_clicks_spend_min', 5.0) <= total_spend < 
+            self.config.get('ns3_high_spend_few_clicks_spend_max', 10.0)) and \
+           total_clicks < self.config.get('ns3_high_spend_few_clicks_clicks_max', 3):
+            multiplier = self.config.get('ns3_bid_adjustment', 1.00)
+            adjustment = multiplier - 1.0
+            self.logger.info(f"NS-3 High Spend Few Clicks: spend=${total_spend:.2f}, clicks={total_clicks}, adjustment={adjustment:+.1%}")
+            return adjustment
+        
+        # NS-4: No Sales - Moderate Spend ($10-$15)
+        if (self.config.get('ns4_no_sales_moderate_spend_min', 10.0) <= total_spend < 
+            self.config.get('ns4_no_sales_moderate_spend_max', 15.0)):
+            multiplier = self.config.get('ns4_bid_adjustment', 0.90)
+            adjustment = multiplier - 1.0
+            self.logger.info(f"NS-4 No Sales Moderate Spend: spend=${total_spend:.2f}, adjustment={adjustment:+.1%}")
+            return adjustment
+        
+        # NS-5: No Sales - High Spend ($15-$30)
+        if (self.config.get('ns5_no_sales_high_spend_min', 15.0) <= total_spend < 
+            self.config.get('ns5_no_sales_high_spend_max', 30.0)):
+            multiplier = self.config.get('ns5_bid_adjustment', 0.80)
+            adjustment = multiplier - 1.0
+            self.logger.info(f"NS-5 No Sales High Spend: spend=${total_spend:.2f}, adjustment={adjustment:+.1%}")
+            return adjustment
+        
+        # NS-6: No Sales - Heavy Spend ($30+)
+        if total_spend >= self.config.get('ns6_no_sales_heavy_spend_min', 30.0):
+            multiplier = self.config.get('ns6_bid_adjustment', 0.70)
+            adjustment = multiplier - 1.0
+            self.logger.info(f"NS-6 No Sales Heavy Spend: spend=${total_spend:.2f}, adjustment={adjustment:+.1%}")
+            return adjustment
+        
+        # Default: No specific scenario matched, return 0
+        return 0.0
+    
+    def _determine_acos_rank(self, current_acos: float) -> str:
+        """
+        Determine ACOS rank zone (A+, A, B, C, D, E) based on current ACOS
+        
+        Returns rank as string: 'A+', 'A', 'B', 'C', 'D', or 'E'
+        """
+        if current_acos == float('inf'):
+            return 'E'  # No sales = worst rank
+        
+        # E: Severe Overspend (6.75% - 7.5%+)
+        if current_acos >= self.config.get('acos_tier_e_severe_overspend_min', 0.0675):
+            return 'E'
+        
+        # D: Moderately High ACOS (6% - 6.75%)
+        if current_acos >= self.config.get('acos_tier_d_moderately_high_min', 0.06):
+            return 'D'
+        
+        # C: Slightly Above Target (5% - 6%)
+        if current_acos >= self.config.get('acos_tier_c_slightly_above_min', 0.05):
+            return 'C'
+        
+        # B: Optimal Zone (3.5% - 5%)
+        if current_acos >= self.config.get('acos_tier_b_optimal_min', 0.035):
+            return 'B'
+        
+        # A: High Efficiency (2.25% - 3.5%)
+        if current_acos >= self.config.get('acos_tier_a_high_efficiency_min', 0.0225):
+            return 'A'
+        
+        # A+: Ultra Profitable (0% - 2.25%)
+        return 'A+'
+    
+    def _get_bid_multiplier_for_rank_and_orders(self, acos_rank: str, order_count: int) -> float:
+        """
+        Get bid adjustment multiplier based on ACOS rank and order count
+        
+        Returns multiplier (e.g., 1.15 for +15%, 0.85 for -15%)
+        """
+        # Rank E: Severe Overspend - always reduce
+        if acos_rank == 'E':
+            return self.config.get('bid_adjustment_e_order_1', 0.75)
+        
+        # Rank D: Moderately High - reduce
+        if acos_rank == 'D':
+            return self.config.get('bid_adjustment_d_order_1', 0.85)
+        
+        # Rank C: Slightly Above Target - slight reduction
+        if acos_rank == 'C':
+            return self.config.get('bid_adjustment_c_order_1', 0.95)
+        
+        # Rank B: Optimal Zone - scale based on orders
+        if acos_rank == 'B':
+            if order_count == 1:
+                return self.config.get('bid_adjustment_b_order_1', 1.00)
+            elif order_count == 2:
+                return self.config.get('bid_adjustment_b_order_2', 1.05)
+            elif order_count >= 4:
+                return self.config.get('bid_adjustment_b_order_4', 1.10)
+            else:
+                return 1.00
+        
+        # Rank A: High Efficiency - scale based on orders
+        if acos_rank == 'A':
+            if order_count == 1:
+                return self.config.get('bid_adjustment_a_order_1', 1.10)
+            elif order_count == 2:
+                return self.config.get('bid_adjustment_a_order_2', 1.15)
+            elif order_count >= 4:
+                return self.config.get('bid_adjustment_a_order_4', 1.25)
+            else:
+                return 1.10
+        
+        # Rank A+: Ultra Profitable - aggressive scaling based on orders
+        if acos_rank == 'A+':
+            if order_count == 1:
+                return self.config.get('bid_adjustment_aplus_order_1', 1.15)
+            elif order_count == 2:
+                return self.config.get('bid_adjustment_aplus_order_2', 1.25)
+            elif order_count >= 4:
+                return self.config.get('bid_adjustment_aplus_order_4', 1.30)
+            else:
+                return 1.15
+        
+        # Default: no adjustment
+        return 1.0
     
     def _filter_performance_data_by_timeframe(self, performance_data: List[Dict[str, Any]], 
                                              days: int) -> List[Dict[str, Any]]:
@@ -1402,21 +1437,25 @@ class BidOptimizationEngine:
         acos_change = (current_acos - previous_acos) / previous_acos if previous_acos > 0 else 0
         
         if acos_change >= self.acos_trend_decline_threshold:
-            # ACOS ↑ >30% (getting worse) - apply -10% adjustment
+            # ACOS ↑ >30% (getting worse) - apply bid multiplier 0.90 (-10%)
             result['should_skip'] = self.skip_on_acos_decline
             result['trend'] = 'declining'
-            result['trend_adjustment'] = self.acos_trend_decline_adjustment
+            # Use bid multiplier from config (default 0.90 = -10%)
+            bid_multiplier = self.config.get('acos_trend_decline_bid_multiplier', 0.90)
+            result['trend_adjustment'] = bid_multiplier - 1.0  # Convert to adjustment
             self.logger.info(
                 f"ACOS trend declining: {current_acos:.2%} vs {previous_acos:.2%} "
-                f"({acos_change:+.1%} change) = -10% adjustment"
+                f"({acos_change:+.1%} change) = bid multiplier {bid_multiplier:.2f}"
             )
         elif acos_change <= -self.acos_trend_improvement_threshold:
-            # ACOS ↓ >30% (improving) - apply +10% adjustment
+            # ACOS ↓ >30% (improving) - apply bid multiplier 1.10 (+10%)
             result['trend'] = 'improving'
-            result['trend_adjustment'] = self.acos_trend_improvement_adjustment
+            # Use bid multiplier from config (default 1.10 = +10%)
+            bid_multiplier = self.config.get('acos_trend_improvement_bid_multiplier', 1.10)
+            result['trend_adjustment'] = bid_multiplier - 1.0  # Convert to adjustment
             self.logger.info(
                 f"ACOS trend improving: {current_acos:.2%} vs {previous_acos:.2%} "
-                f"({acos_change:+.1%} change) = +10% adjustment"
+                f"({acos_change:+.1%} change) = bid multiplier {bid_multiplier:.2f}"
             )
         else:
             # Stable

@@ -5,6 +5,7 @@ Provides REST API endpoints for the React frontend to interact with the AI Rule 
 
 import os
 import sys
+import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
@@ -50,6 +51,14 @@ logger = logging.getLogger(__name__)
 db_connector: Optional[DatabaseConnector] = None
 ai_engine: Optional[AIRuleEngine] = None
 rule_config: Optional[RuleConfig] = None
+
+# Global state for tracking engine execution
+engine_status = {
+    'is_running': False,
+    'last_run': None,
+    'current_run': None,
+    'execution_history': []
+}
 
 
 @asynccontextmanager
@@ -2232,6 +2241,126 @@ async def update_ai_control_config(config: AIControlConfig):
     except Exception as e:
         logger.error(f"Error updating AI control config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# API ENDPOINTS - ENGINE EXECUTION CONTROL
+# ============================================================================
+
+class EngineTriggerRequest(BaseModel):
+    campaigns: Optional[List[int]] = None
+    sync: bool = False
+    dry_run: bool = False
+
+@app.post("/api/engine/trigger")
+async def trigger_engine_execution(request: Optional[EngineTriggerRequest] = None):
+    """Trigger AI rule engine execution"""
+    global engine_status
+    
+    if request is None:
+        request = EngineTriggerRequest()
+    
+    if engine_status['is_running']:
+        raise HTTPException(
+            status_code=409, 
+            detail="Engine is already running. Please wait for current execution to complete."
+        )
+    
+    engine_status['is_running'] = True
+    engine_status['current_run'] = {
+        'start_time': datetime.now().isoformat(),
+        'status': 'running',
+        'campaigns': request.campaigns,
+        'sync': request.sync,
+        'dry_run': request.dry_run
+    }
+    
+    def run_engine_task():
+        try:
+            from src.ai_rule_engine.main import run_analysis_cycle
+            from src.ai_rule_engine.config import RuleConfig
+            
+            class Args:
+                def __init__(self, campaigns_list, dry_run_flag, sync_flag):
+                    self.campaigns = campaigns_list
+                    self.output = f'reports/ai_recommendations_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+                    self.format = 'json'
+                    self.log_level = 'INFO'
+                    self.max_recommendations = 100
+                    self.min_confidence = 0.3
+                    self.dry_run = dry_run_flag
+                    self.sync = sync_flag
+                    self.skip_download = False
+                    self.skip_upload = False
+                    self.continuous = False
+                    self.interval = 3600
+            
+            start_time = datetime.now()
+            args = Args(request.campaigns, request.dry_run, request.sync)
+            recommendations = run_analysis_cycle(rule_config, db_connector, args, f"api_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            duration = (datetime.now() - start_time).total_seconds()
+            
+            engine_status['current_run'].update({
+                'end_time': datetime.now().isoformat(),
+                'status': 'completed',
+                'duration_seconds': duration,
+                'recommendations_count': len(recommendations) if recommendations else 0,
+                'error': None
+            })
+            
+            engine_status['execution_history'].append(engine_status['current_run'].copy())
+            if len(engine_status['execution_history']) > 10:
+                engine_status['execution_history'].pop(0)
+                
+        except Exception as e:
+            logger.error(f"Engine execution error: {e}", exc_info=True)
+            engine_status['current_run'].update({
+                'end_time': datetime.now().isoformat(),
+                'status': 'failed',
+                'duration_seconds': (datetime.now() - datetime.fromisoformat(engine_status['current_run']['start_time'])).total_seconds(),
+                'error': str(e)
+            })
+        finally:
+            engine_status['is_running'] = False
+            engine_status['last_run'] = engine_status['current_run'].copy()
+            engine_status['current_run'] = None
+    
+    thread = threading.Thread(target=run_engine_task, daemon=True)
+    thread.start()
+    
+    return {
+        "status": "started",
+        "message": "AI rule engine execution started",
+        "start_time": engine_status['current_run']['start_time']
+    }
+
+@app.get("/api/engine/status")
+async def get_engine_status():
+    """Get current engine execution status"""
+    global engine_status
+    
+    status = {
+        'is_running': engine_status['is_running'],
+        'last_run': engine_status['last_run'],
+        'current_run': engine_status['current_run']
+    }
+    
+    if engine_status['is_running'] and engine_status['current_run']:
+        start = datetime.fromisoformat(engine_status['current_run']['start_time'])
+        elapsed = (datetime.now() - start).total_seconds()
+        status['current_run'] = engine_status['current_run'].copy()
+        status['current_run']['elapsed_seconds'] = elapsed
+    
+    return status
+
+@app.get("/api/engine/history")
+async def get_engine_history(limit: int = Query(10, ge=1, le=50)):
+    """Get execution history"""
+    global engine_status
+    return {
+        'history': engine_status['execution_history'][-limit:],
+        'total_runs': len(engine_status['execution_history'])
+    }
 
 
 # ============================================================================

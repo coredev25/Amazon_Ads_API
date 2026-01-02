@@ -330,6 +330,30 @@ export interface LearningStats {
   recent_training_runs: ModelTrainingStatus[];
 }
 
+export interface EngineRun {
+  start_time: string;
+  end_time?: string;
+  status: string;
+  duration_seconds?: number;
+  recommendations_count?: number;
+  error?: string;
+  campaigns?: number[];
+  sync?: boolean;
+  dry_run?: boolean;
+  elapsed_seconds?: number;
+}
+
+export interface EngineStatus {
+  is_running: boolean;
+  last_run: EngineRun | null;
+  current_run: EngineRun | null;
+}
+
+export interface EngineHistory {
+  history: EngineRun[];
+  total_runs: number;
+}
+
 // ============================================================================
 // API FUNCTIONS - OVERVIEW / COMMAND CENTER
 // ============================================================================
@@ -590,6 +614,29 @@ export const fetchAIControlConfig = async (): Promise<AIControlConfig> => {
 
 export const updateAIControlConfig = async (config: Partial<AIControlConfig>) => {
   const response = await api.post('/api/config/ai-control', config);
+  return response.data;
+};
+
+// ============================================================================
+// API FUNCTIONS - ENGINE EXECUTION CONTROL
+// ============================================================================
+
+export const fetchEngineStatus = async (): Promise<EngineStatus> => {
+  const response = await api.get('/api/engine/status');
+  return response.data;
+};
+
+export const triggerEngineExecution = async (params?: {
+  campaigns?: number[];
+  sync?: boolean;
+  dry_run?: boolean;
+}) => {
+  const response = await api.post('/api/engine/trigger', params || {});
+  return response.data;
+};
+
+export const fetchEngineHistory = async (limit: number = 10): Promise<EngineHistory> => {
+  const response = await api.get(`/api/engine/history?limit=${limit}`);
   return response.data;
 };
 
