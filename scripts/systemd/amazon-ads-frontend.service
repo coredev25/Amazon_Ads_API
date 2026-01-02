@@ -1,0 +1,23 @@
+[Unit]
+Description=Amazon Ads API - Dashboard Frontend Service
+After=network.target amazon-ads-api.service
+Requires=amazon-ads-api.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/home/vip/Desktop/Amazon_Ads_API/dashboard/frontend
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="NODE_ENV=production"
+EnvironmentFile=/home/vip/Desktop/Amazon_Ads_API/dashboard/.env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=amazon-ads-frontend
+
+[Install]
+WantedBy=multi-user.target
+

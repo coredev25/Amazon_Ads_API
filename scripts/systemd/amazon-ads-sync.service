@@ -1,0 +1,22 @@
+[Unit]
+Description=Amazon Ads API - Sync Service
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/home/vip/Desktop/Amazon_Ads_API
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/vip/Desktop/Amazon_Ads_API/.env
+ExecStart=/usr/bin/node src/sync.js
+Restart=always
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=amazon-ads-sync
+
+[Install]
+WantedBy=multi-user.target
+

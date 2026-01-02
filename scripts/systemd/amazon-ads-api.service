@@ -1,0 +1,22 @@
+[Unit]
+Description=Amazon Ads API - Dashboard API Service
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/home/vip/Desktop/Amazon_Ads_API
+Environment="PATH=/home/vip/Desktop/Amazon_Ads_API/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/vip/Desktop/Amazon_Ads_API/.env
+ExecStart=/home/vip/Desktop/Amazon_Ads_API/venv/bin/python -m uvicorn dashboard.api.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=amazon-ads-api
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,15 @@
+# Example nginx.conf modifications
+# Add this to your main nginx.conf or create a separate include file
+
+# Add to http block in /etc/nginx/nginx.conf:
+
+http {
+    # ... existing configuration ...
+    
+    # Include Amazon Ads API configuration
+    include /etc/nginx/sites-available/amazon-ads-api.conf;
+    
+    # Or if using sites-enabled:
+    # include /etc/nginx/sites-enabled/amazon-ads-api.conf;
+}
+
