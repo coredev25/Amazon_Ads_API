@@ -14,7 +14,7 @@
     "dashboard": "bash scripts/run.sh",
     "dashboard:setup": "bash scripts/setup_database.sh",
     "dashboard:api": "cd dashboard && python -m uvicorn api.main:app --reload --port 8000",
-    "dashboard:frontend": "cd dashboard/frontend && npm run dev",
+    "dashboard:frontend": "cd dashboard/frontend && npm start",
     "streamlit": "streamlit run dashboard/app.py",
     "test": "npm run test:api && npm run test:sync",
     "test:api": "node tests/test_api.js",
