@@ -368,6 +368,50 @@ export const fetchTrends = async (days: number = 30): Promise<TrendDataPoint[]> 
   return response.data;
 };
 
+export interface TopPerformer {
+  campaign_id: number;
+  campaign_name: string;
+  acos: number;
+  roas: number;
+  sales: number;
+  spend: number;
+  change_percentage: number;
+}
+
+export interface NeedsAttention {
+  campaign_id: number;
+  campaign_name: string;
+  acos: number;
+  roas: number;
+  sales: number;
+  spend: number;
+  change_percentage: number;
+  issue: string;
+}
+
+export interface AIInsight {
+  type: string;
+  count: number;
+  message: string;
+  priority: string;
+  color: string;
+}
+
+export const fetchTopPerformers = async (days: number = 7, limit: number = 3): Promise<TopPerformer[]> => {
+  const response = await api.get(`/api/overview/top-performers?days=${days}&limit=${limit}`);
+  return response.data;
+};
+
+export const fetchNeedsAttention = async (days: number = 7, limit: number = 3): Promise<NeedsAttention[]> => {
+  const response = await api.get(`/api/overview/needs-attention?days=${days}&limit=${limit}`);
+  return response.data;
+};
+
+export const fetchAIInsights = async (days: number = 7): Promise<AIInsight[]> => {
+  const response = await api.get(`/api/overview/ai-insights?days=${days}`);
+  return response.data;
+};
+
 export const fetchAlerts = async (limit: number = 10): Promise<Alert[]> => {
   const response = await api.get(`/api/overview/alerts?limit=${limit}`);
   return response.data;

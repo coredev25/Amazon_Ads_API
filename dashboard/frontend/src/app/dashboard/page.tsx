@@ -18,7 +18,7 @@ import {
 import MetricCard from '@/components/MetricCard';
 import { SpendSalesChart, HealthGauge } from '@/components/Charts';
 import EngineStatus from '@/components/EngineStatus';
-import { fetchOverviewMetrics, fetchTrends, fetchAlerts } from '@/utils/api';
+import { fetchOverviewMetrics, fetchTrends, fetchAlerts, fetchTopPerformers, fetchNeedsAttention, fetchAIInsights } from '@/utils/api';
 import {
   formatCurrency,
   formatPercentage,
@@ -44,6 +44,21 @@ export default function CommandCenter() {
   const { data: alerts } = useQuery({
     queryKey: ['alerts'],
     queryFn: () => fetchAlerts(5),
+  });
+
+  const { data: topPerformers } = useQuery({
+    queryKey: ['top-performers', dateRange],
+    queryFn: () => fetchTopPerformers(dateRange, 3),
+  });
+
+  const { data: needsAttention } = useQuery({
+    queryKey: ['needs-attention', dateRange],
+    queryFn: () => fetchNeedsAttention(dateRange, 3),
+  });
+
+  const { data: aiInsights } = useQuery({
+    queryKey: ['ai-insights', dateRange],
+    queryFn: () => fetchAIInsights(dateRange),
   });
 
   // Aggregate trends by timeline view
@@ -326,19 +341,29 @@ export default function CommandCenter() {
             </h3>
           </div>
           <div className="card-body p-0">
-            <div className="divide-y divide-surface-dark-border/50">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="p-4 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900 dark:text-white">
-                      Campaign {i}
-                    </p>
-                          <p className="text-xs text-gray-600 dark:text-gray-400">ACOS: 5.2%</p>
+            {!topPerformers || topPerformers.length === 0 ? (
+              <div className="p-6 text-center text-gray-600 dark:text-gray-400">
+                No top performers found for this period.
+              </div>
+            ) : (
+              <div className="divide-y divide-surface-dark-border/50">
+                {topPerformers.map((campaign) => (
+                  <div key={campaign.campaign_id} className="p-4 flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                        {campaign.campaign_name}
+                      </p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        ACOS: {formatPercentage(campaign.acos)}
+                      </p>
+                    </div>
+                    <span className="badge badge-success">
+                      {campaign.change_percentage > 0 ? '+' : ''}{campaign.change_percentage.toFixed(1)}%
+                    </span>
                   </div>
-                  <span className="badge badge-success">+15%</span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -351,19 +376,30 @@ export default function CommandCenter() {
             </h3>
           </div>
           <div className="card-body p-0">
-            <div className="divide-y divide-surface-dark-border/50">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="p-4 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-900 dark:text-white">
-                      Campaign {i}
-                    </p>
-                          <p className="text-xs text-gray-600 dark:text-gray-400">ACOS: 45.2%</p>
+            {!needsAttention || needsAttention.length === 0 ? (
+              <div className="p-6 text-center text-gray-600 dark:text-gray-400">
+                No campaigns need attention. All performing well!
+              </div>
+            ) : (
+              <div className="divide-y divide-surface-dark-border/50">
+                {needsAttention.map((campaign) => (
+                  <div key={campaign.campaign_id} className="p-4 flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                        {campaign.campaign_name}
+                      </p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        ACOS: {formatPercentage(campaign.acos)}
+                      </p>
+                      <p className="text-xs text-red-400 mt-1">{campaign.issue}</p>
+                    </div>
+                    <span className="badge badge-danger">
+                      {campaign.change_percentage > 0 ? '+' : ''}{campaign.change_percentage.toFixed(1)}%
+                    </span>
                   </div>
-                  <span className="badge badge-danger">-8%</span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -376,23 +412,29 @@ export default function CommandCenter() {
             </h3>
           </div>
           <div className="card-body">
-            <div className="space-y-3">
-              <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
-                <p className="text-sm text-green-400">
-                  12 keywords ready for bid increase
-                </p>
+            {!aiInsights || aiInsights.length === 0 ? (
+              <div className="p-6 text-center text-gray-600 dark:text-gray-400">
+                No AI insights available at this time.
               </div>
-              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                <p className="text-sm text-amber-400">
-                  5 campaigns approaching budget limit
-                </p>
+            ) : (
+              <div className="space-y-3">
+                {aiInsights.map((insight, index) => {
+                  const colorClasses = {
+                    green: 'bg-green-500/10 border-green-500/20 text-green-400',
+                    orange: 'bg-amber-500/10 border-amber-500/20 text-amber-400',
+                    blue: 'bg-blue-500/10 border-blue-500/20 text-blue-400',
+                    red: 'bg-red-500/10 border-red-500/20 text-red-400',
+                  };
+                  const colorClass = colorClasses[insight.color as keyof typeof colorClasses] || colorClasses.blue;
+                  
+                  return (
+                    <div key={index} className={`p-3 rounded-lg border ${colorClass}`}>
+                      <p className="text-sm">{insight.message}</p>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                <p className="text-sm text-blue-400">
-                  8 new negative keyword candidates
-                </p>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

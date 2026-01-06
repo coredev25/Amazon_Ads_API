@@ -12,7 +12,6 @@ import {
   Ban,
   History,
   Settings,
-  Bell,
   Menu,
   X,
   ChevronRight,
@@ -367,12 +366,6 @@ export default function Layout({ children }: LayoutProps) {
                 ) : (
                   <Sun className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                 )}
-              </button>
-
-              {/* Notifications */}
-              <button className="relative p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors hidden md:block">
-                <Bell className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amazon-orange" />
               </button>
 
               {/* User Menu */}

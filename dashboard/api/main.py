@@ -188,6 +188,35 @@ class Alert(BaseModel):
     created_at: str
 
 
+class TopPerformer(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    acos: float
+    roas: float
+    sales: float
+    spend: float
+    change_percentage: float  # Performance change vs previous period
+
+
+class NeedsAttention(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    acos: float
+    roas: float
+    sales: float
+    spend: float
+    change_percentage: float  # Performance change vs previous period
+    issue: str  # Description of the issue
+
+
+class AIInsight(BaseModel):
+    type: str  # 'bid_increase', 'budget_limit', 'negative_keywords', etc.
+    count: int
+    message: str
+    priority: str  # 'high', 'medium', 'low'
+    color: str  # 'green', 'orange', 'blue', etc.
+
+
 class CampaignData(BaseModel):
     campaign_id: int
     campaign_name: str
@@ -881,6 +910,265 @@ async def get_alerts(limit: int = Query(10, ge=1, le=50)):
         return alerts[:limit]
     except Exception as e:
         logger.error(f"Error fetching alerts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/overview/top-performers", response_model=List[TopPerformer])
+async def get_top_performers(days: int = Query(7, ge=1, le=90), limit: int = Query(3, ge=1, le=10)):
+    """Get top performing campaigns based on ACOS and ROAS"""
+    try:
+        campaigns = db_connector.get_campaigns_with_performance(days)
+        
+        # Get previous period for comparison
+        prev_start_date = datetime.now() - timedelta(days=days * 2)
+        prev_end_date = datetime.now() - timedelta(days=days)
+        
+        prev_performance = {}
+        try:
+            with db_connector.get_connection() as conn:
+                import psycopg2.extras
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute("""
+                        SELECT 
+                            c.campaign_id,
+                            SUM(cp.cost) as total_cost,
+                            SUM(cp.attributed_sales_7d) as total_sales
+                        FROM campaigns c
+                        INNER JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id
+                        WHERE c.campaign_status = 'ENABLED'
+                            AND cp.report_date >= %s 
+                            AND cp.report_date < %s
+                        GROUP BY c.campaign_id
+                    """, (prev_start_date, prev_end_date))
+                    for row in cursor.fetchall():
+                        prev_performance[row['campaign_id']] = {
+                            'spend': float(row['total_cost'] or 0),
+                            'sales': float(row['total_sales'] or 0)
+                        }
+        except Exception as e:
+            logger.warning(f"Could not get previous period performance: {e}")
+        
+        top_performers = []
+        for campaign in campaigns:
+            spend = float(campaign.get('total_cost', 0) or 0)
+            sales = float(campaign.get('total_sales', 0) or 0)
+            
+            if sales == 0 or spend == 0:
+                continue
+                
+            acos = (spend / sales) if sales > 0 else 0
+            roas = (sales / spend) if spend > 0 else 0
+            
+            # Only include campaigns with good performance (low ACOS, high ROAS)
+            if acos > 0.3 or roas < 3.0:  # ACOS > 30% or ROAS < 3.0
+                continue
+            
+            # Calculate change percentage
+            change_pct = 0.0
+            if campaign['campaign_id'] in prev_performance:
+                prev_sales = prev_performance[campaign['campaign_id']]['sales']
+                if prev_sales > 0:
+                    change_pct = ((sales - prev_sales) / prev_sales) * 100
+            
+            top_performers.append(TopPerformer(
+                campaign_id=campaign['campaign_id'],
+                campaign_name=campaign['campaign_name'],
+                acos=round(acos * 100, 2),
+                roas=round(roas, 2),
+                sales=round(sales, 2),
+                spend=round(spend, 2),
+                change_percentage=round(change_pct, 1)
+            ))
+        
+        # Sort by ROAS descending, then by sales descending
+        top_performers.sort(key=lambda x: (x.roas, x.sales), reverse=True)
+        
+        return top_performers[:limit]
+    except Exception as e:
+        logger.error(f"Error fetching top performers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/overview/needs-attention", response_model=List[NeedsAttention])
+async def get_needs_attention(days: int = Query(7, ge=1, le=90), limit: int = Query(3, ge=1, le=10)):
+    """Get campaigns that need attention due to poor performance"""
+    try:
+        campaigns = db_connector.get_campaigns_with_performance(days)
+        
+        # Get previous period for comparison
+        prev_start_date = datetime.now() - timedelta(days=days * 2)
+        prev_end_date = datetime.now() - timedelta(days=days)
+        
+        prev_performance = {}
+        try:
+            with db_connector.get_connection() as conn:
+                import psycopg2.extras
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute("""
+                        SELECT 
+                            c.campaign_id,
+                            SUM(cp.cost) as total_cost,
+                            SUM(cp.attributed_sales_7d) as total_sales
+                        FROM campaigns c
+                        INNER JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id
+                        WHERE c.campaign_status = 'ENABLED'
+                            AND cp.report_date >= %s 
+                            AND cp.report_date < %s
+                        GROUP BY c.campaign_id
+                    """, (prev_start_date, prev_end_date))
+                    for row in cursor.fetchall():
+                        prev_performance[row['campaign_id']] = {
+                            'spend': float(row['total_cost'] or 0),
+                            'sales': float(row['total_sales'] or 0)
+                        }
+        except Exception as e:
+            logger.warning(f"Could not get previous period performance: {e}")
+        
+        needs_attention = []
+        for campaign in campaigns:
+            spend = float(campaign.get('total_cost', 0) or 0)
+            sales = float(campaign.get('total_sales', 0) or 0)
+            budget = float(campaign.get('budget_amount', 0) or 0)
+            
+            if spend == 0:
+                continue
+                
+            acos = (spend / sales * 100) if sales > 0 else float('inf')
+            roas = (sales / spend) if spend > 0 else 0
+            
+            # Identify issues
+            issues = []
+            if sales == 0:
+                issues.append("No sales")
+            elif acos > rule_config.acos_target * 1.5:
+                issues.append(f"High ACOS ({acos:.1f}%)")
+            elif budget > 0 and spend >= budget * 0.9:
+                issues.append("Near budget limit")
+            elif roas < 1.0 and sales > 0:
+                issues.append("ROAS below 1.0")
+            
+            if not issues:
+                continue
+            
+            # Calculate change percentage
+            change_pct = 0.0
+            if campaign['campaign_id'] in prev_performance:
+                prev_sales = prev_performance[campaign['campaign_id']]['sales']
+                if prev_sales > 0:
+                    change_pct = ((sales - prev_sales) / prev_sales) * 100
+            
+            needs_attention.append(NeedsAttention(
+                campaign_id=campaign['campaign_id'],
+                campaign_name=campaign['campaign_name'],
+                acos=round(acos, 2) if acos != float('inf') else 999.99,
+                roas=round(roas, 2),
+                sales=round(sales, 2),
+                spend=round(spend, 2),
+                change_percentage=round(change_pct, 1),
+                issue=", ".join(issues)
+            ))
+        
+        # Sort by ACOS descending (worst first), then by spend descending
+        needs_attention.sort(key=lambda x: (x.acos if x.acos != 999.99 else 0, x.spend), reverse=True)
+        
+        return needs_attention[:limit]
+    except Exception as e:
+        logger.error(f"Error fetching campaigns needing attention: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/overview/ai-insights", response_model=List[AIInsight])
+async def get_ai_insights(days: int = Query(7, ge=1, le=90)):
+    """Get AI-generated insights for the dashboard"""
+    try:
+        insights = []
+        
+        # 1. Keywords ready for bid increase
+        try:
+            with db_connector.get_connection() as conn:
+                import psycopg2.extras
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    # Get keywords with high ROAS and good performance
+                    start_date = datetime.now() - timedelta(days=days)
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT k.keyword_id) as count
+                        FROM keywords k
+                        INNER JOIN keyword_performance kp ON k.keyword_id = kp.keyword_id
+                        INNER JOIN campaigns c ON k.campaign_id = c.campaign_id
+                        WHERE c.campaign_status = 'ENABLED'
+                            AND kp.report_date >= %s
+                            AND kp.attributed_sales_7d > 0
+                            AND kp.cost > 0
+                            AND (kp.attributed_sales_7d / kp.cost) >= 5.0  -- ROAS >= 5.0
+                            AND kp.impressions >= 100
+                            AND kp.clicks >= 10
+                    """, (start_date,))
+                    result = cursor.fetchone()
+                    if result and result['count'] > 0:
+                        insights.append(AIInsight(
+                            type="bid_increase",
+                            count=result['count'],
+                            message=f"{result['count']} keywords ready for bid increase",
+                            priority="high",
+                            color="green"
+                        ))
+        except Exception as e:
+            logger.warning(f"Could not get bid increase insights: {e}")
+        
+        # 2. Campaigns approaching budget limit
+        try:
+            campaigns = db_connector.get_campaigns_with_performance(days)
+            budget_campaigns = 0
+            for campaign in campaigns:
+                budget = float(campaign.get('budget_amount', 0) or 0)
+                spend = float(campaign.get('total_cost', 0) or 0)
+                if budget > 0 and spend >= budget * 0.8:  # 80% or more used
+                    budget_campaigns += 1
+            
+            if budget_campaigns > 0:
+                insights.append(AIInsight(
+                    type="budget_limit",
+                    count=budget_campaigns,
+                    message=f"{budget_campaigns} campaigns approaching budget limit",
+                    priority="medium",
+                    color="orange"
+                ))
+        except Exception as e:
+            logger.warning(f"Could not get budget limit insights: {e}")
+        
+        # 3. Negative keyword candidates
+        try:
+            with db_connector.get_connection() as conn:
+                import psycopg2.extras
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    # Get search terms with high spend but no sales
+                    start_date = datetime.now() - timedelta(days=days)
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT st.search_term) as count
+                        FROM search_term_performance st
+                        INNER JOIN keywords k ON st.keyword_id = k.keyword_id
+                        INNER JOIN campaigns c ON k.campaign_id = c.campaign_id
+                        WHERE c.campaign_status = 'ENABLED'
+                            AND st.report_date >= %s
+                            AND st.cost > 1.0  -- At least $1 spent
+                            AND st.attributed_sales_7d = 0  -- No sales
+                            AND st.impressions >= 50
+                    """, (start_date,))
+                    result = cursor.fetchone()
+                    if result and result['count'] > 0:
+                        insights.append(AIInsight(
+                            type="negative_keywords",
+                            count=result['count'],
+                            message=f"{result['count']} new negative keyword candidates",
+                            priority="medium",
+                            color="blue"
+                        ))
+        except Exception as e:
+            logger.warning(f"Could not get negative keyword insights: {e}")
+        
+        return insights
+    except Exception as e:
+        logger.error(f"Error fetching AI insights: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
