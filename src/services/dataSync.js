@@ -14,12 +14,71 @@ class DataSyncService {
     this.client = new AmazonAdsClient();
   }
 
+  async syncPortfolios() {
+    try {
+      logger.info('📋 Syncing portfolios from Amazon Ads API v3...');
+      const portfolios = await this.client.getPortfolios();
+
+      if (!portfolios || portfolios.length === 0) {
+        logger.warn('⚠️  No portfolios returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${portfolios.length} portfolios, saving to database...`);
+
+      let synced = 0;
+      let errors = 0;
+      
+      for (const portfolio of portfolios) {
+        try {
+          if (!portfolio.portfolioId) {
+            logger.warn('Skipping portfolio without portfolioId:', portfolio);
+            errors++;
+            continue;
+          }
+          
+          const portfolioId = String(portfolio.portfolioId);
+          const portfolioName = portfolio.name || 'Unnamed Portfolio';
+          const state = (portfolio.state || 'ENABLED').toUpperCase();
+          const budgetAmount = portfolio.budget?.budget || portfolio.budgetAmount || null;
+          const budgetType = portfolio.budget?.budgetType || portfolio.budgetType || 'DAILY';
+
+          await db.query(
+            `INSERT INTO portfolios (
+              portfolio_id, portfolio_name, budget_amount, 
+              budget_type, state
+            ) VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (portfolio_id) 
+            DO UPDATE SET
+              portfolio_name = $2,
+              budget_amount = $3,
+              budget_type = $4,
+              state = $5,
+              updated_at = CURRENT_TIMESTAMP`,
+            [portfolioId, portfolioName, budgetAmount, budgetType, state]
+          );
+          synced++;
+        } catch (error) {
+          logger.error(`Error syncing portfolio ${portfolio.portfolioId}:`, error.message);
+          errors++;
+        }
+      }
+
+      logger.info(`✅ Synced ${synced} portfolios${errors > 0 ? `, ${errors} errors` : ''}`);
+      return synced;
+    } catch (error) {
+      logger.error('❌ Error syncing portfolios:', error.message);
+      throw error;
+    }
+  }
+
   /**
    * Sync campaigns data using v3 API
    * v3 API field names are different from v2:
    * - state -> state (ENABLED, PAUSED, ARCHIVED) - stored as-is in uppercase
    * - name -> name
    * - budget -> budget.budget or dailyBudget
+   * Now supports SP, SB, and SD campaign types
    */
   async syncCampaigns() {
     try {
@@ -70,12 +129,20 @@ class DataSyncService {
             budgetType = 'DAILY';
           }
 
+          // v2.0: Extract portfolio_id, campaign_type, and ad type
+          const portfolioId = campaign.portfolioId ? String(campaign.portfolioId) : null;
+          const campaignType = campaign.campaignType || 'SP'; // SP, SB, SD
+          const sbAdType = campaign.adFormat || campaign.sbAdType || null; // PRODUCT_COLLECTION, STORE_SPOTLIGHT, VIDEO
+          const sdTargetingType = campaign.targetingType === 'AUDIENCES' ? 'AUDIENCES' : 
+                                   campaign.targetingType === 'CONTEXTUAL' ? 'CONTEXTUAL' : null;
+
         await db.query(
           `INSERT INTO campaigns (
             campaign_id, campaign_name, campaign_status, 
             targeting_type, start_date, end_date,
-            budget_amount, budget_type
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            budget_amount, budget_type, portfolio_id,
+            campaign_type, sb_ad_type, sd_targeting_type
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           ON CONFLICT (campaign_id) 
           DO UPDATE SET
             campaign_name = $2,
@@ -85,6 +152,10 @@ class DataSyncService {
             end_date = $6,
             budget_amount = $7,
             budget_type = $8,
+            portfolio_id = $9,
+            campaign_type = $10,
+            sb_ad_type = $11,
+            sd_targeting_type = $12,
             updated_at = CURRENT_TIMESTAMP`,
           [
             campaignId,
@@ -94,7 +165,11 @@ class DataSyncService {
             startDate,
             endDate,
             budgetAmount,
-            budgetType
+            budgetType,
+            portfolioId,
+            campaignType,
+            sbAdType,
+            sdTargetingType
           ]
         );
         synced++;
@@ -825,6 +900,287 @@ class DataSyncService {
   }
 
   /**
+   * Sync Sponsored Brands campaigns using v3 API
+   */
+  async syncSponsoredBrandsCampaigns() {
+    try {
+      logger.info('📋 Syncing Sponsored Brands campaigns from Amazon Ads API v3...');
+      const campaigns = await this.client.getSponsoredBrandsCampaigns();
+
+      if (!campaigns || campaigns.length === 0) {
+        logger.warn('⚠️  No Sponsored Brands campaigns returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${campaigns.length} SB campaigns, saving to database...`);
+
+      let synced = 0;
+      let errors = 0;
+      
+      for (const campaign of campaigns) {
+        try {
+          if (!campaign.campaignId) {
+            logger.warn('Skipping SB campaign without campaignId:', campaign);
+            errors++;
+            continue;
+          }
+          
+          const campaignId = String(campaign.campaignId);
+          const campaignName = campaign.name || 'Unnamed SB Campaign';
+          const campaignState = (campaign.state || 'ENABLED').toUpperCase();
+          const targetingType = campaign.targetingType || 'MANUAL';
+          const startDate = campaign.startDate || null;
+          const endDate = campaign.endDate || null;
+          
+          let budgetAmount = null;
+          let budgetType = 'DAILY';
+          
+          if (campaign.budget) {
+            budgetAmount = campaign.budget.budget || campaign.budget.budgetAmount || null;
+            budgetType = campaign.budget.budgetType || campaign.budget.type || 'DAILY';
+          }
+
+          const portfolioId = campaign.portfolioId ? String(campaign.portfolioId) : null;
+          const campaignType = 'SB';
+          // Extract SB ad type: PRODUCT_COLLECTION, STORE_SPOTLIGHT, VIDEO
+          const sbAdType = campaign.adFormat || campaign.creativeType || 
+                          (campaign.creative?.type) || null;
+
+          await db.query(
+            `INSERT INTO campaigns (
+              campaign_id, campaign_name, campaign_status, 
+              targeting_type, start_date, end_date,
+              budget_amount, budget_type, portfolio_id,
+              campaign_type, sb_ad_type
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (campaign_id) 
+            DO UPDATE SET
+              campaign_name = $2,
+              campaign_status = $3,
+              targeting_type = $4,
+              start_date = $5,
+              end_date = $6,
+              budget_amount = $7,
+              budget_type = $8,
+              portfolio_id = $9,
+              campaign_type = $10,
+              sb_ad_type = $11,
+              updated_at = CURRENT_TIMESTAMP`,
+            [
+              campaignId, campaignName, campaignState,
+              targetingType, startDate, endDate,
+              budgetAmount, budgetType, portfolioId,
+              campaignType, sbAdType
+            ]
+          );
+          synced++;
+        } catch (error) {
+          logger.error(`Error syncing SB campaign ${campaign.campaignId}:`, error.message);
+          errors++;
+        }
+      }
+
+      logger.info(`✅ Synced ${synced} Sponsored Brands campaigns${errors > 0 ? `, ${errors} errors` : ''}`);
+      return synced;
+    } catch (error) {
+      logger.error('❌ Error syncing Sponsored Brands campaigns:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync Sponsored Display campaigns using v3 API
+   */
+  async syncSponsoredDisplayCampaigns() {
+    try {
+      logger.info('📋 Syncing Sponsored Display campaigns from Amazon Ads API v3...');
+      const campaigns = await this.client.getSponsoredDisplayCampaigns();
+
+      if (!campaigns || campaigns.length === 0) {
+        logger.warn('⚠️  No Sponsored Display campaigns returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${campaigns.length} SD campaigns, saving to database...`);
+
+      let synced = 0;
+      let errors = 0;
+      
+      for (const campaign of campaigns) {
+        try {
+          if (!campaign.campaignId) {
+            logger.warn('Skipping SD campaign without campaignId:', campaign);
+            errors++;
+            continue;
+          }
+          
+          const campaignId = String(campaign.campaignId);
+          const campaignName = campaign.name || 'Unnamed SD Campaign';
+          const campaignState = (campaign.state || 'ENABLED').toUpperCase();
+          const targetingType = campaign.targetingType || 'MANUAL';
+          const startDate = campaign.startDate || null;
+          const endDate = campaign.endDate || null;
+          
+          let budgetAmount = null;
+          let budgetType = 'DAILY';
+          
+          if (campaign.budget) {
+            budgetAmount = campaign.budget.budget || campaign.budget.budgetAmount || null;
+            budgetType = campaign.budget.budgetType || campaign.budget.type || 'DAILY';
+          }
+
+          const portfolioId = campaign.portfolioId ? String(campaign.portfolioId) : null;
+          const campaignType = 'SD';
+          // Extract SD targeting type: CONTEXTUAL, AUDIENCES
+          const sdTargetingType = campaign.targetingType === 'AUDIENCES' ? 'AUDIENCES' :
+                                 campaign.targetingType === 'CONTEXTUAL' ? 'CONTEXTUAL' :
+                                 campaign.targeting?.type || null;
+
+          await db.query(
+            `INSERT INTO campaigns (
+              campaign_id, campaign_name, campaign_status, 
+              targeting_type, start_date, end_date,
+              budget_amount, budget_type, portfolio_id,
+              campaign_type, sd_targeting_type
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (campaign_id) 
+            DO UPDATE SET
+              campaign_name = $2,
+              campaign_status = $3,
+              targeting_type = $4,
+              start_date = $5,
+              end_date = $6,
+              budget_amount = $7,
+              budget_type = $8,
+              portfolio_id = $9,
+              campaign_type = $10,
+              sd_targeting_type = $11,
+              updated_at = CURRENT_TIMESTAMP`,
+            [
+              campaignId, campaignName, campaignState,
+              targetingType, startDate, endDate,
+              budgetAmount, budgetType, portfolioId,
+              campaignType, sdTargetingType
+            ]
+          );
+          synced++;
+        } catch (error) {
+          logger.error(`Error syncing SD campaign ${campaign.campaignId}:`, error.message);
+          errors++;
+        }
+      }
+
+      logger.info(`✅ Synced ${synced} Sponsored Display campaigns${errors > 0 ? `, ${errors} errors` : ''}`);
+      return synced;
+    } catch (error) {
+      logger.error('❌ Error syncing Sponsored Display campaigns:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync product targeting (ASINs and Categories) using v3 API
+   */
+  async syncProductTargets() {
+    try {
+      logger.info('📋 Syncing product targets from Amazon Ads API v3...');
+      const targets = await this.client.getTargets();
+
+      if (!targets || targets.length === 0) {
+        logger.warn('⚠️  No product targets returned from API');
+        return 0;
+      }
+
+      logger.info(`📥 Retrieved ${targets.length} product targets, saving to database...`);
+
+      // Build lookup for existing campaigns and ad groups
+      const campaignResult = await db.query('SELECT campaign_id FROM campaigns');
+      const adGroupResult = await db.query('SELECT ad_group_id FROM ad_groups');
+      const campaignIds = new Set(campaignResult.rows.map(r => String(r.campaign_id)));
+      const adGroupIds = new Set(adGroupResult.rows.map(r => String(r.ad_group_id)));
+
+      let synced = 0;
+      let skipped = 0;
+      let errors = 0;
+
+      for (const target of targets) {
+        try {
+          if (!target.targetId) {
+            logger.warn('Skipping product target without targetId:', target);
+            errors++;
+            continue;
+          }
+          
+          if (!target.campaignId || !target.adGroupId) {
+            logger.warn(`Skipping product target ${target.targetId} without campaignId or adGroupId`);
+            errors++;
+            continue;
+          }
+          
+          const campaignIdStr = String(target.campaignId);
+          const adGroupIdStr = String(target.adGroupId);
+          
+          if (!campaignIds.has(campaignIdStr)) {
+            logger.debug(`Skipping product target ${target.targetId} - campaign ${target.campaignId} not found`);
+            skipped++;
+            continue;
+          }
+
+          if (!adGroupIds.has(adGroupIdStr)) {
+            logger.debug(`Skipping product target ${target.targetId} - ad group ${target.adGroupId} not found`);
+            skipped++;
+            continue;
+          }
+
+          const targetId = String(target.targetId);
+          // Determine target type: ASIN or CATEGORY
+          const targetType = target.targetingExpression?.type || 
+                           (target.asin ? 'ASIN' : 'CATEGORY');
+          const targetValue = target.asin || target.categoryId || 
+                            target.targetingExpression?.value || '';
+
+          const bid = target.bid || null;
+          const state = (target.state || 'ENABLED').toUpperCase();
+
+          await db.query(
+            `INSERT INTO product_targets (
+              target_id, campaign_id, ad_group_id,
+              target_type, target_value, bid, state
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (target_id)
+            DO UPDATE SET
+              campaign_id = $2,
+              ad_group_id = $3,
+              target_type = $4,
+              target_value = $5,
+              bid = $6,
+              state = $7,
+              updated_at = CURRENT_TIMESTAMP`,
+            [
+              targetId, campaignIdStr, adGroupIdStr,
+              targetType, targetValue, bid, state
+            ]
+          );
+          synced++;
+
+          if (synced % 100 === 0) {
+            logger.info(`📋 Product targets progress: ${synced}/${targets.length}`);
+          }
+        } catch (error) {
+          logger.error(`Error syncing product target ${target.targetId}:`, error.message);
+          errors++;
+        }
+      }
+
+      logger.info(`✅ Synced ${synced} product targets, skipped ${skipped}${errors > 0 ? `, ${errors} errors` : ''}`);
+      return synced;
+    } catch (error) {
+      logger.error('❌ Error syncing product targets:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Log sync operation
    */
   async logSync(syncType, status, recordsProcessed, errorMessage = null, startTime) {
@@ -857,26 +1213,58 @@ class DataSyncService {
 
     try {
       logger.info('═══════════════════════════════════════════════════════');
-      logger.info('🚀 STARTING FULL DATA SYNC (Amazon Ads API v3)');
+      logger.info('🚀 STARTING FULL DATA SYNC (Amazon Ads API v3) - v2.0');
       logger.info(`📅 Syncing performance data for the last ${daysBack} days`);
       logger.info('═══════════════════════════════════════════════════════');
 
-      // Sync metadata
-      // logger.info('\n📋 PHASE 1: Syncing Metadata');
-      // logger.info('───────────────────────────────────────────────────────');
-      // totalRecords.campaigns = await this.syncCampaigns();
-      // totalRecords.adGroups = await this.syncAdGroups();
-      // totalRecords.keywords = await this.syncKeywords();
+      // Sync metadata - v2.0: Include Portfolios, SB, SD, and Product Targeting
+      logger.info('\n📋 PHASE 1: Syncing Metadata (v2.0)');
+      logger.info('───────────────────────────────────────────────────────');
       
-      // // Try to sync product ads (may fail on some accounts)
-      // try {
-      //   totalRecords.productAds = await this.syncProductAds();
-      // } catch (error) {
-      //   logger.warn(`⚠️  Product ads sync skipped: ${error.message}`);
-      //   totalRecords.productAds = 0;
-      // }
+      // Sync portfolios first
+      try {
+        await this.syncPortfolios();
+      } catch (error) {
+        logger.warn(`⚠️  Portfolios sync skipped: ${error.message}`);
+      }
       
-      // logger.info(`✅ Metadata sync complete: ${totalRecords.campaigns} campaigns, ${totalRecords.adGroups} ad groups, ${totalRecords.keywords} keywords, ${totalRecords.productAds} product ads`);
+      // Sync Sponsored Products campaigns
+      totalRecords.campaigns = await this.syncCampaigns();
+      totalRecords.adGroups = await this.syncAdGroups();
+      totalRecords.keywords = await this.syncKeywords();
+      
+      // Sync Sponsored Brands campaigns
+      try {
+        const sbCampaigns = await this.syncSponsoredBrandsCampaigns();
+        totalRecords.campaigns += sbCampaigns;
+      } catch (error) {
+        logger.warn(`⚠️  Sponsored Brands campaigns sync skipped: ${error.message}`);
+      }
+      
+      // Sync Sponsored Display campaigns
+      try {
+        const sdCampaigns = await this.syncSponsoredDisplayCampaigns();
+        totalRecords.campaigns += sdCampaigns;
+      } catch (error) {
+        logger.warn(`⚠️  Sponsored Display campaigns sync skipped: ${error.message}`);
+      }
+      
+      // Try to sync product ads (may fail on some accounts)
+      try {
+        totalRecords.productAds = await this.syncProductAds();
+      } catch (error) {
+        logger.warn(`⚠️  Product ads sync skipped: ${error.message}`);
+        totalRecords.productAds = 0;
+      }
+      
+      // Sync product targeting
+      try {
+        await this.syncProductTargets();
+      } catch (error) {
+        logger.warn(`⚠️  Product targets sync skipped: ${error.message}`);
+      }
+      
+      logger.info(`✅ Metadata sync complete: ${totalRecords.campaigns} campaigns (SP+SB+SD), ${totalRecords.adGroups} ad groups, ${totalRecords.keywords} keywords, ${totalRecords.productAds} product ads`);
 
       // Sync performance data for the last N days
       logger.info('\n📊 PHASE 2: Syncing Performance Data');

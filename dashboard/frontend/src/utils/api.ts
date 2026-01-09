@@ -363,8 +363,26 @@ export const fetchOverviewMetrics = async (days: number = 7): Promise<OverviewMe
   return response.data;
 };
 
-export const fetchTrends = async (days: number = 30): Promise<TrendDataPoint[]> => {
-  const response = await api.get(`/api/overview/trends?days=${days}`);
+export const fetchTrends = async (
+  days?: number,
+  startDate?: Date,
+  endDate?: Date
+): Promise<TrendDataPoint[]> => {
+  const params = new URLSearchParams();
+  
+  if (startDate && endDate) {
+    // Use custom date range
+    params.append('start_date', startDate.toISOString().split('T')[0]);
+    params.append('end_date', endDate.toISOString().split('T')[0]);
+  } else if (days) {
+    // Use days parameter
+    params.append('days', days.toString());
+  } else {
+    // Default to 30 days
+    params.append('days', '30');
+  }
+  
+  const response = await api.get(`/api/overview/trends?${params.toString()}`);
   return response.data;
 };
 
@@ -397,6 +415,130 @@ export interface AIInsight {
   color: string;
 }
 
+// ============================================================================
+// V2.0 TYPES
+// ============================================================================
+
+export interface Portfolio {
+  portfolio_id: number;
+  portfolio_name: string;
+  budget_amount?: number;
+  budget_type?: string;
+  status: string;
+  campaign_count: number;
+  total_spend: number;
+  total_sales: number;
+  acos?: number | null;
+  roas?: number | null;
+}
+
+export interface AdGroup {
+  ad_group_id: number;
+  ad_group_name: string;
+  campaign_id: number;
+  campaign_name: string;
+  default_bid: number;
+  status: string;
+  spend: number;
+  sales: number;
+  acos?: number | null;
+  roas?: number | null;
+  orders: number;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  cvr: number;
+}
+
+export interface ProductTarget {
+  target_id: number;
+  target_type: string;
+  target_value: string;
+  campaign_id: number;
+  ad_group_id: number;
+  bid: number;
+  status: string;
+  spend: number;
+  sales: number;
+  acos?: number | null;
+  roas?: number | null;
+  orders: number;
+  impressions: number;
+  clicks: number;
+}
+
+export interface SearchTerm {
+  search_term: string;
+  campaign_id: number;
+  ad_group_id: number;
+  keyword_id?: number;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+  acos?: number | null;
+  roas?: number | null;
+  harvest_action?: 'add_keyword' | 'add_negative' | null;
+}
+
+export interface Placement {
+  placement: string;
+  campaign_id?: number;
+  ad_group_id?: number;
+  keyword_id?: number;
+  target_id?: number;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+  acos?: number | null;
+  roas?: number | null;
+}
+
+export interface COGS {
+  asin: string;
+  cogs: number;
+  amazon_fees_percentage: number;
+  notes?: string;
+}
+
+export interface FinancialMetrics {
+  asin: string;
+  sales: number;
+  cogs: number;
+  amazon_fees: number;
+  gross_profit: number;
+  ad_spend: number;
+  net_profit: number;
+  tacos: number;
+  break_even_acos: number;
+}
+
+export interface ChangeHistoryEntry {
+  id: number;
+  change_date: string;
+  user_id?: string;
+  entity_type: string;
+  entity_id: number;
+  entity_name?: string;
+  field_name: string;
+  old_value?: string;
+  new_value?: string;
+  change_type: string;
+  triggered_by: string;
+  reason?: string;
+  [key: string]: unknown;
+}
+
+export interface ColumnLayoutPreference {
+  view_type: string;
+  column_visibility: Record<string, boolean>;
+  column_order: string[];
+  column_widths: Record<string, number>;
+}
+
 export const fetchTopPerformers = async (days: number = 7, limit: number = 3): Promise<TopPerformer[]> => {
   const response = await api.get(`/api/overview/top-performers?days=${days}&limit=${limit}`);
   return response.data;
@@ -423,6 +565,209 @@ export const fetchAlerts = async (limit: number = 10): Promise<Alert[]> => {
 
 export const fetchCampaigns = async (days: number = 7): Promise<Campaign[]> => {
   const response = await api.get(`/api/campaigns?days=${days}`);
+  return response.data;
+};
+
+// ============================================================================
+// API FUNCTIONS - V2.0 FEATURES
+// ============================================================================
+
+// Portfolios
+export const fetchPortfolios = async (days: number = 7, accountId?: string): Promise<Portfolio[]> => {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (accountId) params.append('account_id', accountId);
+  const response = await api.get(`/api/v2/portfolios?${params.toString()}`);
+  return response.data;
+};
+
+// Ad Groups
+export const fetchAdGroups = async (campaignId?: number, days: number = 7): Promise<AdGroup[]> => {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (campaignId) params.append('campaign_id', campaignId.toString());
+  const response = await api.get(`/api/v2/ad-groups?${params.toString()}`);
+  return response.data;
+};
+
+// Product Targeting
+export const fetchProductTargeting = async (campaignId?: number, adGroupId?: number, days: number = 7): Promise<ProductTarget[]> => {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (campaignId) params.append('campaign_id', campaignId.toString());
+  if (adGroupId) params.append('ad_group_id', adGroupId.toString());
+  const response = await api.get(`/api/v2/targeting?${params.toString()}`);
+  return response.data;
+};
+
+// Search Terms
+export const fetchSearchTerms = async (campaignId?: number, adGroupId?: number, days: number = 7, minClicks: number = 0): Promise<SearchTerm[]> => {
+  const params = new URLSearchParams({ 
+    days: days.toString(), 
+    min_clicks: minClicks.toString() 
+  });
+  if (campaignId) params.append('campaign_id', campaignId.toString());
+  if (adGroupId) params.append('ad_group_id', adGroupId.toString());
+  const response = await api.get(`/api/v2/search-terms?${params.toString()}`);
+  return response.data;
+};
+
+// Placements
+export const fetchPlacements = async (campaignId?: number, adGroupId?: number, days: number = 7): Promise<Placement[]> => {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (campaignId) params.append('campaign_id', campaignId.toString());
+  if (adGroupId) params.append('ad_group_id', adGroupId.toString());
+  const response = await api.get(`/api/v2/placements?${params.toString()}`);
+  return response.data;
+};
+
+// COGS
+export const fetchCOGS = async (): Promise<COGS[]> => {
+  const response = await api.get('/api/v2/cogs');
+  return response.data;
+};
+
+export const updateCOGS = async (asin: string, cogs: number, amazonFeesPercentage: number = 0.15, notes?: string) => {
+  const response = await api.post('/api/v2/cogs', {
+    asin,
+    cogs,
+    amazon_fees_percentage: amazonFeesPercentage,
+    notes
+  });
+  return response.data;
+};
+
+// Financial Metrics
+export const fetchFinancialMetrics = async (days: number = 7, asin?: string): Promise<FinancialMetrics[]> => {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (asin) params.append('asin', asin);
+  const response = await api.get(`/api/v2/financial-metrics?${params.toString()}`);
+  return response.data;
+};
+
+// Change History
+export const fetchChangeHistory = async (entityType?: string, entityId?: number, limit: number = 100): Promise<ChangeHistoryEntry[]> => {
+  const params = new URLSearchParams({ limit: limit.toString() });
+  if (entityType) params.append('entity_type', entityType);
+  if (entityId) params.append('entity_id', entityId.toString());
+  const response = await api.get(`/api/v2/change-history?${params.toString()}`);
+  return response.data;
+};
+
+// Column Layout Preferences
+export const fetchColumnLayout = async (viewType: string, userId: string): Promise<ColumnLayoutPreference> => {
+  const response = await api.get(`/api/v2/column-layout/${viewType}?userId=${userId}`);
+  return response.data;
+};
+
+export const saveColumnLayout = async (viewType: string, userId: string, layout: {
+  column_visibility: Record<string, boolean>;
+  column_order: string[];
+  column_widths: Record<string, number>;
+}) => {
+  const response = await api.post(`/api/v2/column-layout/${viewType}?userId=${userId}`, {
+    view_type: viewType,
+    ...layout
+  });
+  return response.data;
+};
+
+// Search Term Harvesting Actions
+export const addSearchTermAsKeyword = async (
+  searchTerm: string,
+  campaignId: number,
+  adGroupId: number,
+  matchType: 'BROAD' | 'PHRASE' | 'EXACT',
+  bid?: number
+) => {
+  const params = new URLSearchParams({
+    campaign_id: campaignId.toString(),
+    ad_group_id: adGroupId.toString(),
+    match_type: matchType,
+  });
+  if (bid) params.append('bid', bid.toString());
+  
+  const response = await api.post(`/api/v2/search-terms/${encodeURIComponent(searchTerm)}/add-keyword?${params.toString()}`);
+  return response.data;
+};
+
+export const addSearchTermAsNegative = async (
+  searchTerm: string,
+  campaignId: number,
+  adGroupId: number,
+  matchType: 'negative_exact' | 'negative_phrase' | 'negative_broad'
+) => {
+  const params = new URLSearchParams({
+    campaign_id: campaignId.toString(),
+    ad_group_id: adGroupId.toString(),
+    match_type: matchType,
+  });
+  
+  const response = await api.post(`/api/v2/search-terms/${encodeURIComponent(searchTerm)}/add-negative?${params.toString()}`);
+  return response.data;
+};
+
+// Inventory Status
+export const getInventoryStatus = async (asin: string): Promise<{
+  asin: string;
+  current_inventory: number | null;
+  days_of_supply: number | null;
+  ad_status: string;
+  is_out_of_stock: boolean;
+}> => {
+  const response = await api.get(`/api/v2/inventory-status/${asin}`);
+  return response.data;
+};
+
+// Dayparting
+export const fetchDaypartingHeatmap = async (
+  entityType: string,
+  entityId: number,
+  metric: 'sales' | 'spend' | 'acos' | 'ctr' | 'cvr' = 'sales',
+  days: number = 30
+): Promise<Array<{
+  day_of_week: number;
+  hour_of_day: number;
+  value: number;
+  metric: string;
+}>> => {
+  const response = await api.get(`/api/v2/dayparting/heatmap?entity_type=${entityType}&entity_id=${entityId}&metric=${metric}&days=${days}`);
+  return response.data;
+};
+
+export const fetchDaypartingConfig = async (
+  entityType: string,
+  entityId: number
+): Promise<Array<{
+  day_of_week: number;
+  hour_of_day: number;
+  bid_multiplier: number;
+  is_active: boolean;
+}>> => {
+  const response = await api.get(`/api/v2/dayparting/config?entity_type=${entityType}&entity_id=${entityId}`);
+  return response.data;
+};
+
+export const saveDaypartingConfig = async (
+  entityType: string,
+  entityId: number,
+  config: Array<{
+    day_of_week: number;
+    hour_of_day: number;
+    bid_multiplier: number;
+    is_active: boolean;
+  }>
+) => {
+  const response = await api.post(`/api/v2/dayparting/config?entity_type=${entityType}&entity_id=${entityId}`, config);
+  return response.data;
+};
+
+// Multi-Account
+export const fetchAccounts = async (): Promise<Array<{
+  account_id: string;
+  account_name: string;
+  marketplace_id?: string;
+  region?: string;
+  is_active: boolean;
+}>> => {
+  const response = await api.get('/api/v2/accounts');
   return response.data;
 };
 

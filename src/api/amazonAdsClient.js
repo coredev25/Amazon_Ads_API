@@ -279,6 +279,8 @@ class AmazonAdsClient {
             dataArray = responseData.negativeKeywords;
           } else if (responseData.campaignNegativeKeywords) {
             dataArray = responseData.campaignNegativeKeywords;
+          } else if (responseData.portfolios) {
+            dataArray = responseData.portfolios;
           } else {
             // Try to find any array in the response (excluding nextToken)
             const keys = Object.keys(responseData).filter(k => k !== 'nextToken');
@@ -520,6 +522,82 @@ class AmazonAdsClient {
     }
 
     return await this.getAllPaginatedDataV3('/sp/targets/list', requestBody);
+  }
+
+  /**
+   * Get Portfolios using v3 API
+   * Endpoint: POST /portfolios/list
+   */
+  async getPortfolios(filters = {}) {
+    logger.info('Fetching Portfolios (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
+    };
+
+    if (filters.portfolioIdFilter) {
+      requestBody.portfolioIdFilter = filters.portfolioIdFilter;
+    }
+
+    return await this.getAllPaginatedDataV3('/portfolios/list', requestBody);
+  }
+
+  /**
+   * Get Sponsored Brands campaigns using v3 API
+   * Endpoint: POST /sb/campaigns/list
+   */
+  async getSponsoredBrandsCampaigns(filters = {}) {
+    logger.info('Fetching Sponsored Brands campaigns (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
+    };
+
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.nameFilter) {
+      requestBody.nameFilter = filters.nameFilter;
+    }
+
+    const customHeaders = {
+      'Content-Type': 'application/vnd.sbcampaign.v3+json',
+      'Accept': 'application/vnd.sbcampaign.v3+json'
+    };
+
+    return await this.getAllPaginatedDataV3('/sb/campaigns/list', requestBody, customHeaders);
+  }
+
+  /**
+   * Get Sponsored Display campaigns using v3 API
+   * Endpoint: POST /sd/campaigns/list
+   */
+  async getSponsoredDisplayCampaigns(filters = {}) {
+    logger.info('Fetching Sponsored Display campaigns (v3 API)...');
+    
+    const requestBody = {
+      stateFilter: filters.stateFilter || {
+        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+      }
+    };
+
+    if (filters.campaignIdFilter) {
+      requestBody.campaignIdFilter = filters.campaignIdFilter;
+    }
+    if (filters.nameFilter) {
+      requestBody.nameFilter = filters.nameFilter;
+    }
+
+    const customHeaders = {
+      'Content-Type': 'application/vnd.sdcampaign.v3+json',
+      'Accept': 'application/vnd.sdcampaign.v3+json'
+    };
+
+    return await this.getAllPaginatedDataV3('/sd/campaigns/list', requestBody, customHeaders);
   }
 
   /**

@@ -24,6 +24,9 @@ import {
 } from 'lucide-react';
 import { cn } from '@/utils/helpers';
 import { useAuth } from '@/contexts/AuthContext';
+import MultiAccountSwitcher from './MultiAccountSwitcher';
+import { fetchAccounts } from '@/utils/api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/contexts/ThemeContext';
 import { search, SearchResult } from '@/utils/api';
 
@@ -33,13 +36,14 @@ interface LayoutProps {
 
 const navItems = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Command Center' },
-  { href: '/dashboard/campaigns', icon: Target, label: 'Campaign Manager' },
+  { href: '/dashboard/campaigns-v2', icon: Target, label: 'Campaign Manager' },
   { href: '/dashboard/keywords', icon: Key, label: 'Keywords & Targeting' },
   { href: '/dashboard/recommendations', icon: Lightbulb, label: 'AI Recommendations' },
   { href: '/dashboard/ai-control', icon: Zap, label: 'AI Control' },
   { href: '/dashboard/rules', icon: BookOpen, label: 'Rule Engine' },
   { href: '/dashboard/negatives', icon: Ban, label: 'Negative Keywords' },
   { href: '/dashboard/changelog', icon: History, label: 'Transparency Log' },
+  { href: '/dashboard/change-history', icon: History, label: 'Change History' },
   { href: '/dashboard/settings', icon: Settings, label: 'Strategy Config' },
 ];
 
@@ -50,6 +54,33 @@ export default function Layout({ children }: LayoutProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const queryClient = useQueryClient();
+  const [currentAccountId, setCurrentAccountId] = useState<string | undefined>();
+
+  // Fetch accounts for multi-account switcher
+  const { data: accounts } = useQuery({
+    queryKey: ['accounts'],
+    queryFn: fetchAccounts,
+    enabled: true,
+  });
+
+  const handleAccountChange = (accountId: string) => {
+    setCurrentAccountId(accountId);
+    // Store in localStorage for persistence
+    localStorage.setItem('current_account_id', accountId);
+    // Invalidate all queries to refetch with new account
+    // queryClient.invalidateQueries();
+  };
+
+  // Load saved account on mount
+  useEffect(() => {
+    const savedAccountId = localStorage.getItem('current_account_id');
+    if (savedAccountId && accounts?.some(a => a.account_id === savedAccountId)) {
+      setCurrentAccountId(savedAccountId);
+    } else if (accounts && accounts.length > 0) {
+      setCurrentAccountId(accounts[0].account_id);
+    }
+  }, [accounts]);
 
   // Handle responsive behavior
   useEffect(() => {
@@ -244,23 +275,6 @@ export default function Layout({ children }: LayoutProps) {
           })}
         </nav>
 
-        {/* AI Status */}
-        {sidebarOpen && (
-          <div className="absolute bottom-4 left-4 right-4">
-            <div className="card p-4 animate-fade-in">
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse" />
-                  <div className="absolute inset-0 w-3 h-3 rounded-full bg-green-500 animate-ping" />
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-gray-900 dark:text-white">AI Engine Active</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">Last sync: 2 min ago</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </aside>
 
       {/* Main Content */}
@@ -354,6 +368,15 @@ export default function Layout({ children }: LayoutProps) {
                   </div>
                 )}
               </div>
+
+              {/* Multi-Account Switcher */}
+              {accounts && accounts.length > 1 && (
+                <MultiAccountSwitcher
+                  accounts={accounts}
+                  currentAccountId={currentAccountId}
+                  onAccountChange={handleAccountChange}
+                />
+              )}
 
               {/* Theme Toggle */}
               <button

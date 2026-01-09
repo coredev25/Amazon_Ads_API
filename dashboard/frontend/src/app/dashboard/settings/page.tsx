@@ -481,7 +481,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Link to AI Control */}
-      <Link href="/ai-control" className="card p-6 flex items-center justify-between group hover:border-amazon-orange/50 transition-colors">
+      <Link href="/dashboard/ai-control" className="card p-6 flex items-center justify-between group hover:border-amazon-orange/50 transition-colors">
         <div className="flex items-center gap-4">
           <div className="p-3 rounded-xl bg-amazon-orange/20">
             <Brain className="w-6 h-6 text-amazon-orange" />

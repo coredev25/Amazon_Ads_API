@@ -18,6 +18,7 @@ import {
 import MetricCard from '@/components/MetricCard';
 import { SpendSalesChart, HealthGauge } from '@/components/Charts';
 import EngineStatus from '@/components/EngineStatus';
+import DateRangePicker, { DateRange } from '@/components/DateRangePicker';
 import { fetchOverviewMetrics, fetchTrends, fetchAlerts, fetchTopPerformers, fetchNeedsAttention, fetchAIInsights } from '@/utils/api';
 import {
   formatCurrency,
@@ -27,18 +28,68 @@ import {
   cn,
 } from '@/utils/helpers';
 
+// Helper function to calculate date range (similar to DateRangePicker's calculateDateRange)
+function calculateDateRange(type: DateRange['type']): { startDate: Date; endDate: Date } {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let endDate = new Date(today);
+  endDate.setHours(23, 59, 59, 999);
+  
+  let startDate = new Date(today);
+
+  switch (type) {
+    case 'last_7_days':
+      startDate.setDate(startDate.getDate() - 6);
+      break;
+    case 'last_14_days':
+      startDate.setDate(startDate.getDate() - 13);
+      break;
+    case 'last_30_days':
+      startDate.setDate(startDate.getDate() - 29);
+      break;
+    default:
+      startDate.setDate(startDate.getDate() - 6); // Default to 7 days
+  }
+
+  return { startDate, endDate };
+}
+
 export default function CommandCenter() {
-  const [dateRange, setDateRange] = useState(7);
+  // Initialize date range with calculated dates
+  const initialDateRange = useMemo(() => {
+    const { startDate, endDate } = calculateDateRange('last_7_days');
+    return {
+      type: 'last_7_days' as const,
+      days: 7,
+      startDate,
+      endDate,
+    };
+  }, []);
+
+  const [dateRange, setDateRange] = useState<DateRange>(initialDateRange);
   const [timelineView, setTimelineView] = useState<'daily' | 'weekly'>('daily');
 
+  // Calculate days for metrics (for backward compatibility)
+  const metricsDays = useMemo(() => {
+    if (dateRange.days) return dateRange.days;
+    if (dateRange.type === 'last_7_days') return 7;
+    if (dateRange.type === 'last_14_days') return 14;
+    if (dateRange.type === 'last_30_days') return 30;
+    return 7;
+  }, [dateRange]);
+
   const { data: metrics, isLoading: metricsLoading } = useQuery({
-    queryKey: ['overview-metrics', dateRange],
-    queryFn: () => fetchOverviewMetrics(dateRange),
+    queryKey: ['overview-metrics', metricsDays],
+    queryFn: () => fetchOverviewMetrics(metricsDays),
   });
 
   const { data: trends, isLoading: trendsLoading } = useQuery({
-    queryKey: ['overview-trends', 30],
-    queryFn: () => fetchTrends(30),
+    queryKey: ['overview-trends', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), dateRange.days],
+    queryFn: () => fetchTrends(
+      dateRange.days,
+      dateRange.startDate,
+      dateRange.endDate
+    ),
   });
 
   const { data: alerts } = useQuery({
@@ -47,64 +98,153 @@ export default function CommandCenter() {
   });
 
   const { data: topPerformers } = useQuery({
-    queryKey: ['top-performers', dateRange],
-    queryFn: () => fetchTopPerformers(dateRange, 3),
+    queryKey: ['top-performers', metricsDays],
+    queryFn: () => fetchTopPerformers(metricsDays, 3),
   });
 
   const { data: needsAttention } = useQuery({
-    queryKey: ['needs-attention', dateRange],
-    queryFn: () => fetchNeedsAttention(dateRange, 3),
+    queryKey: ['needs-attention', metricsDays],
+    queryFn: () => fetchNeedsAttention(metricsDays, 3),
   });
 
   const { data: aiInsights } = useQuery({
-    queryKey: ['ai-insights', dateRange],
-    queryFn: () => fetchAIInsights(dateRange),
+    queryKey: ['ai-insights', metricsDays],
+    queryFn: () => fetchAIInsights(metricsDays),
   });
 
-  // Aggregate trends by timeline view
+  // Helper function to generate all dates in a range
+  const generateDateRange = (start: Date, end: Date): Date[] => {
+    const dates: Date[] = [];
+    const current = new Date(start);
+    current.setHours(0, 0, 0, 0);
+    const endDate = new Date(end);
+    endDate.setHours(23, 59, 59, 999);
+    
+    while (current <= endDate) {
+      dates.push(new Date(current));
+      current.setDate(current.getDate() + 1);
+    }
+    return dates;
+  };
+
+  // Aggregate trends by timeline view - only show data within selected date range
+  // Fill missing dates with zero values
   const processedTrends = useMemo(() => {
-    if (!trends || trends.length === 0) return [];
+    // Get the actual date range boundaries
+    const rangeStart = dateRange.startDate ? new Date(dateRange.startDate) : null;
+    const rangeEnd = dateRange.endDate ? new Date(dateRange.endDate) : null;
+    
+    if (!rangeStart || !rangeEnd) return [];
+    
+    // Normalize dates
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd.setHours(23, 59, 59, 999);
+    
+    // Create a map of existing data by date string (YYYY-MM-DD)
+    const dataMap = new Map<string, { spend: number; sales: number; acos: number; roas: number }>();
+    
+    if (trends && trends.length > 0) {
+      trends.forEach(t => {
+        const trendDate = new Date(t.date);
+        trendDate.setHours(0, 0, 0, 0);
+        
+        // Only include dates within the selected range
+        if (trendDate >= rangeStart && trendDate <= rangeEnd) {
+          const dateKey = trendDate.toISOString().split('T')[0];
+          dataMap.set(dateKey, {
+            spend: t.spend || 0,
+            sales: t.sales || 0,
+            acos: t.acos || 0,
+            roas: t.roas || 0,
+          });
+        }
+      });
+    }
     
     if (timelineView === 'daily') {
-      return trends.map(t => ({
-        date: new Date(t.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        spend: t.spend,
-        sales: t.sales,
-        acos: t.acos,
-        roas: t.roas,
-      }));
-    } else {
-      // Aggregate by week
-      const weeklyData: Record<string, { spend: number; sales: number; count: number }> = {};
+      // Generate all dates in the range and fill missing ones with zeros
+      const allDates = generateDateRange(rangeStart, rangeEnd);
       
-      trends.forEach(t => {
-        const date = new Date(t.date);
+      return allDates.map(date => {
+        const dateKey = date.toISOString().split('T')[0];
+        const data = dataMap.get(dateKey) || { spend: 0, sales: 0, acos: 0, roas: 0 };
+        
+        return {
+          date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          spend: data.spend,
+          sales: data.sales,
+          acos: data.acos,
+          roas: data.roas,
+        };
+      });
+    } else {
+      // Weekly view: Generate all dates, then aggregate by week
+      const allDates = generateDateRange(rangeStart, rangeEnd);
+      
+      // Aggregate by week
+      const weeklyData: Record<string, { 
+        spend: number; 
+        sales: number; 
+        count: number;
+        dates: Date[];
+      }> = {};
+      
+      allDates.forEach(date => {
         // Get the start of the week (Sunday)
         const weekStart = new Date(date);
         weekStart.setDate(date.getDate() - date.getDay());
+        weekStart.setHours(0, 0, 0, 0);
         const weekKey = weekStart.toISOString().split('T')[0];
         
         if (!weeklyData[weekKey]) {
-          weeklyData[weekKey] = { spend: 0, sales: 0, count: 0 };
+          weeklyData[weekKey] = { 
+            spend: 0, 
+            sales: 0, 
+            count: 0,
+            dates: []
+          };
         }
         
-        weeklyData[weekKey].spend += t.spend;
-        weeklyData[weekKey].sales += t.sales;
+        const dateKey = date.toISOString().split('T')[0];
+        const data = dataMap.get(dateKey) || { spend: 0, sales: 0, acos: 0, roas: 0 };
+        
+        weeklyData[weekKey].spend += data.spend;
+        weeklyData[weekKey].sales += data.sales;
         weeklyData[weekKey].count += 1;
+        weeklyData[weekKey].dates.push(new Date(date));
       });
       
       return Object.entries(weeklyData)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([weekKey, data]) => {
-          const weekStart = new Date(weekKey);
-          const weekEnd = new Date(weekStart);
-          weekEnd.setDate(weekStart.getDate() + 6);
+          // Get min/max dates within the selected range for this week
+          const datesInRange = data.dates.filter(d => d >= rangeStart && d <= rangeEnd);
+          if (datesInRange.length === 0) {
+            // Fallback to week boundaries if no dates in range
+            const weekStartDate = new Date(weekKey);
+            const weekEndDate = new Date(weekStartDate);
+            weekEndDate.setDate(weekStartDate.getDate() + 6);
+            return {
+              date: `${weekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+              spend: data.spend,
+              sales: data.sales,
+              acos: data.sales > 0 ? (data.spend / data.sales) * 100 : 0,
+              roas: data.spend > 0 ? data.sales / data.spend : 0,
+            };
+          }
+          
+          const minDate = new Date(Math.min(...datesInRange.map(d => d.getTime())));
+          const maxDate = new Date(Math.max(...datesInRange.map(d => d.getTime())));
+          
+          // Clamp to range boundaries
+          const displayStart = minDate < rangeStart ? rangeStart : minDate;
+          const displayEnd = maxDate > rangeEnd ? rangeEnd : maxDate;
           
           const avgAcos = data.sales > 0 ? (data.spend / data.sales) * 100 : 0;
           const avgRoas = data.spend > 0 ? data.sales / data.spend : 0;
           
           return {
-            date: `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+            date: `${displayStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${displayEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
             spend: data.spend,
             sales: data.sales,
             acos: avgAcos,
@@ -112,7 +252,7 @@ export default function CommandCenter() {
           };
         });
     }
-  }, [trends, timelineView]);
+  }, [trends, timelineView, dateRange.startDate, dateRange.endDate]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -125,15 +265,11 @@ export default function CommandCenter() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <select
+          <DateRangePicker
             value={dateRange}
-            onChange={(e) => setDateRange(Number(e.target.value))}
-            className="select"
-          >
-            <option value={7}>Last 7 Days</option>
-            <option value={14}>Last 14 Days</option>
-            <option value={30}>Last 30 Days</option>
-          </select>
+            onChange={setDateRange}
+            className="z-10"
+          />
         </div>
       </div>
 

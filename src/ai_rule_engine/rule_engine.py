@@ -14,7 +14,7 @@ from .database import DatabaseConnector
 from .rules import ACOSRule, ROASRule, CTRRule, NegativeKeywordRule, BudgetRule
 from .recommendations import RecommendationEngine, Recommendation
 from .intelligence_engines import IntelligenceOrchestrator
-from .negative_manager import NegativeKeywordManager
+from .negative_manager import SmartNegativeKeywordManager
 from .bid_optimizer import BidOptimizationEngine, BudgetOptimizationEngine
 from .learning_loop import LearningLoop, ModelTrainer
 from .telemetry import TelemetryClient
@@ -86,7 +86,7 @@ class AIRuleEngine:
         # Pass db_connector in config so waste patterns can be loaded from database
         negative_config = config.__dict__.copy()
         negative_config['db_connector'] = db_connector
-        self.negative_manager = NegativeKeywordManager(negative_config)
+        self.negative_manager = SmartNegativeKeywordManager(negative_config)
         
         # Initialize learning loop (if enabled) - must be before bid optimizer
         if config.enable_learning_loop:

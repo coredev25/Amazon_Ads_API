@@ -129,6 +129,14 @@ app.add_middleware(
     max_age=3600,
 )
 
+# Register v2.0 API router
+try:
+    from dashboard.api import api_v2
+    app.include_router(api_v2.router)
+    logger.info("v2.0 API endpoints registered")
+except Exception as e:
+    logger.warning(f"Could not register v2.0 API endpoints: {e}")
+
 
 # ============================================================================
 # PYDANTIC MODELS
@@ -760,27 +768,60 @@ async def get_overview_metrics(days: int = Query(7, ge=1, le=90)):
 
 
 @app.get("/api/overview/trends", response_model=List[TrendDataPoint])
-async def get_overview_trends(days: int = Query(30, ge=7, le=90)):
-    """Get trend data for charts"""
+async def get_overview_trends(
+    days: Optional[int] = Query(None, ge=1, le=365),
+    start_date: Optional[str] = Query(None, description="Start date in YYYY-MM-DD format"),
+    end_date: Optional[str] = Query(None, description="End date in YYYY-MM-DD format")
+):
+    """Get trend data for charts. Supports either days parameter or custom date range."""
     try:
-        # Get daily performance data
+        # Determine start and end dates
+        if start_date and end_date:
+            # Custom date range
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+                start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+                end = datetime.strptime(end_date, '%Y-%m-%d')
+                end = end.replace(hour=23, minute=59, second=59, microsecond=999999)  # Include full end date
+                
+                # Validate date range
+                if start > end:
+                    raise HTTPException(status_code=400, detail="Start date must be before or equal to end date")
+                
+                # Ensure end date is not in the future
+                now = datetime.now()
+                if end > now:
+                    end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+        elif days:
+            # Use days parameter
+            now = datetime.now()
+            end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)  # Include today
+        else:
+            # Default to last 30 days
+            now = datetime.now()
+            end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start = (now - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Get daily performance data - only for dates within the specified range
         query = """
         SELECT 
             report_date,
             SUM(cost) as spend,
             SUM(attributed_sales_7d) as sales
         FROM campaign_performance
-        WHERE report_date >= %s
+        WHERE report_date >= %s AND report_date <= %s
         GROUP BY report_date
         ORDER BY report_date ASC
         """
         
-        start_date = datetime.now() - timedelta(days=days)
-        
         with db_connector.get_connection() as conn:
             import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute(query, (start_date,))
+                cursor.execute(query, (start, end))
                 rows = cursor.fetchall()
         
         trends = []
@@ -799,6 +840,8 @@ async def get_overview_trends(days: int = Query(30, ge=7, le=90)):
             ))
         
         return trends
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2645,16 +2688,21 @@ async def get_engine_status():
     """Get current engine execution status"""
     global engine_status
     
+    # Ensure proper structure - convert None to null for JSON
+    last_run = engine_status.get('last_run')
+    current_run = engine_status.get('current_run')
+    
     status = {
-        'is_running': engine_status['is_running'],
-        'last_run': engine_status['last_run'],
-        'current_run': engine_status['current_run']
+        'is_running': engine_status.get('is_running', False),
+        'last_run': last_run if last_run is not None else None,
+        'current_run': None
     }
     
-    if engine_status['is_running'] and engine_status['current_run']:
-        start = datetime.fromisoformat(engine_status['current_run']['start_time'])
+    # Update current_run with elapsed time if running
+    if engine_status.get('is_running') and current_run:
+        start = datetime.fromisoformat(current_run.get('start_time', datetime.now().isoformat()))
         elapsed = (datetime.now() - start).total_seconds()
-        status['current_run'] = engine_status['current_run'].copy()
+        status['current_run'] = current_run.copy()
         status['current_run']['elapsed_seconds'] = elapsed
     
     return status
