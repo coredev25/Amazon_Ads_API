@@ -19,6 +19,7 @@ import {
   BarChart3,
   Brain,
 } from 'lucide-react';
+import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
 import { fetchChangeLog, revertChange, fetchLearningStats, type ChangeLogEntry, type LearningStats } from '@/utils/api';
 import {
   formatCurrency,
@@ -30,23 +31,29 @@ import {
 
 export default function ChangeLogPage() {
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>('all');
-  const [dateRange, setDateRange] = useState(7);
+  const [dateRange, setDateRange] = useState<DateRange>({
+    type: 'last_7_days',
+    days: 7,
+  });
   const [showOutcomes, setShowOutcomes] = useState(true);
   
   const queryClient = useQueryClient();
 
+  // Calculate days from dateRange
+  const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
+
   const { data: changelog, isLoading } = useQuery({
-    queryKey: ['changelog', dateRange, entityTypeFilter],
+    queryKey: ['changelog', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), entityTypeFilter],
     queryFn: () => fetchChangeLog({
-      days: dateRange,
+      days,
       entity_type: entityTypeFilter !== 'all' ? entityTypeFilter : undefined,
       limit: 200,
     }),
   });
 
   const { data: learningStats } = useQuery({
-    queryKey: ['learning-stats', dateRange],
-    queryFn: () => fetchLearningStats(dateRange),
+    queryKey: ['learning-stats', days],
+    queryFn: () => fetchLearningStats(days),
   });
 
   const revertMutation = useMutation({
@@ -230,16 +237,7 @@ export default function ChangeLogPage() {
                 <option value="keyword">Keywords</option>
               </select>
             </div>
-            <select
-              value={dateRange}
-              onChange={(e) => setDateRange(Number(e.target.value))}
-              className="select"
-            >
-              <option value={7}>Last 7 Days</option>
-              <option value={14}>Last 14 Days</option>
-              <option value={30}>Last 30 Days</option>
-              <option value={90}>Last 90 Days</option>
-            </select>
+            <DateRangePicker value={dateRange} onChange={setDateRange} />
           </div>
           <label className="flex items-center gap-2 cursor-pointer">
             <input

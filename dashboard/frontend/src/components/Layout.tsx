@@ -36,7 +36,7 @@ interface LayoutProps {
 
 const navItems = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Command Center' },
-  { href: '/dashboard/campaigns-v2', icon: Target, label: 'Campaign Manager' },
+  { href: '/dashboard/campaigns', icon: Target, label: 'Campaign Manager' },
   { href: '/dashboard/keywords', icon: Key, label: 'Keywords & Targeting' },
   { href: '/dashboard/recommendations', icon: Lightbulb, label: 'AI Recommendations' },
   { href: '/dashboard/ai-control', icon: Zap, label: 'AI Control' },

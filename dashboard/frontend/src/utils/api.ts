@@ -103,6 +103,10 @@ export interface Campaign extends Record<string, unknown> {
   ctr: number;
   cvr: number;
   ai_recommendation: string | null;
+  sb_ad_type?: string | null; // PRODUCT_COLLECTION, STORE_SPOTLIGHT, VIDEO
+  sd_targeting_type?: string | null; // CONTEXTUAL, AUDIENCES
+  portfolio_id?: number | null;
+  portfolio_name?: string | null;
 }
 
 export interface Keyword extends Record<string, unknown> {
@@ -563,8 +567,10 @@ export const fetchAlerts = async (limit: number = 10): Promise<Alert[]> => {
 // API FUNCTIONS - CAMPAIGNS
 // ============================================================================
 
-export const fetchCampaigns = async (days: number = 7): Promise<Campaign[]> => {
-  const response = await api.get(`/api/campaigns?days=${days}`);
+export const fetchCampaigns = async (days: number = 7, portfolioId?: number): Promise<Campaign[]> => {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (portfolioId !== undefined) params.append('portfolio_id', portfolioId.toString());
+  const response = await api.get(`/api/campaigns?${params.toString()}`);
   return response.data;
 };
 
@@ -576,7 +582,22 @@ export const fetchCampaigns = async (days: number = 7): Promise<Campaign[]> => {
 export const fetchPortfolios = async (days: number = 7, accountId?: string): Promise<Portfolio[]> => {
   const params = new URLSearchParams({ days: days.toString() });
   if (accountId) params.append('account_id', accountId);
-  const response = await api.get(`/api/v2/portfolios?${params.toString()}`);
+  const response = await api.get(`/api/portfolios?${params.toString()}`);
+  return response.data;
+};
+
+// Add campaign to portfolio
+export const addCampaignToPortfolio = async (campaignId: number, portfolioId: number) => {
+  const response = await api.post(`/api/campaigns/${campaignId}/add-to-portfolio?portfolio_id=${portfolioId}`);
+  return response.data;
+};
+
+// Bulk add campaigns to portfolio
+export const bulkAddCampaignsToPortfolio = async (campaignIds: number[], portfolioId: number) => {
+  const params = new URLSearchParams();
+  campaignIds.forEach(id => params.append('campaign_ids', id.toString()));
+  params.append('portfolio_id', portfolioId.toString());
+  const response = await api.post(`/api/campaigns/bulk-add-to-portfolio?${params.toString()}`);
   return response.data;
 };
 
@@ -584,7 +605,7 @@ export const fetchPortfolios = async (days: number = 7, accountId?: string): Pro
 export const fetchAdGroups = async (campaignId?: number, days: number = 7): Promise<AdGroup[]> => {
   const params = new URLSearchParams({ days: days.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
-  const response = await api.get(`/api/v2/ad-groups?${params.toString()}`);
+  const response = await api.get(`/api/ad-groups?${params.toString()}`);
   return response.data;
 };
 
@@ -593,7 +614,7 @@ export const fetchProductTargeting = async (campaignId?: number, adGroupId?: num
   const params = new URLSearchParams({ days: days.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
-  const response = await api.get(`/api/v2/targeting?${params.toString()}`);
+  const response = await api.get(`/api/targeting?${params.toString()}`);
   return response.data;
 };
 
@@ -605,7 +626,7 @@ export const fetchSearchTerms = async (campaignId?: number, adGroupId?: number, 
   });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
-  const response = await api.get(`/api/v2/search-terms?${params.toString()}`);
+  const response = await api.get(`/api/search-terms?${params.toString()}`);
   return response.data;
 };
 
@@ -614,18 +635,18 @@ export const fetchPlacements = async (campaignId?: number, adGroupId?: number, d
   const params = new URLSearchParams({ days: days.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
-  const response = await api.get(`/api/v2/placements?${params.toString()}`);
+  const response = await api.get(`/api/placements?${params.toString()}`);
   return response.data;
 };
 
 // COGS
 export const fetchCOGS = async (): Promise<COGS[]> => {
-  const response = await api.get('/api/v2/cogs');
+  const response = await api.get('/api/cogs');
   return response.data;
 };
 
 export const updateCOGS = async (asin: string, cogs: number, amazonFeesPercentage: number = 0.15, notes?: string) => {
-  const response = await api.post('/api/v2/cogs', {
+  const response = await api.post('/api/cogs', {
     asin,
     cogs,
     amazon_fees_percentage: amazonFeesPercentage,
@@ -638,7 +659,7 @@ export const updateCOGS = async (asin: string, cogs: number, amazonFeesPercentag
 export const fetchFinancialMetrics = async (days: number = 7, asin?: string): Promise<FinancialMetrics[]> => {
   const params = new URLSearchParams({ days: days.toString() });
   if (asin) params.append('asin', asin);
-  const response = await api.get(`/api/v2/financial-metrics?${params.toString()}`);
+  const response = await api.get(`/api/financial-metrics?${params.toString()}`);
   return response.data;
 };
 
@@ -647,13 +668,13 @@ export const fetchChangeHistory = async (entityType?: string, entityId?: number,
   const params = new URLSearchParams({ limit: limit.toString() });
   if (entityType) params.append('entity_type', entityType);
   if (entityId) params.append('entity_id', entityId.toString());
-  const response = await api.get(`/api/v2/change-history?${params.toString()}`);
+  const response = await api.get(`/api/change-history?${params.toString()}`);
   return response.data;
 };
 
 // Column Layout Preferences
 export const fetchColumnLayout = async (viewType: string, userId: string): Promise<ColumnLayoutPreference> => {
-  const response = await api.get(`/api/v2/column-layout/${viewType}?userId=${userId}`);
+  const response = await api.get(`/api/column-layout/${viewType}?userId=${userId}`);
   return response.data;
 };
 
@@ -662,7 +683,7 @@ export const saveColumnLayout = async (viewType: string, userId: string, layout:
   column_order: string[];
   column_widths: Record<string, number>;
 }) => {
-  const response = await api.post(`/api/v2/column-layout/${viewType}?userId=${userId}`, {
+  const response = await api.post(`/api/column-layout/${viewType}?userId=${userId}`, {
     view_type: viewType,
     ...layout
   });
@@ -684,7 +705,7 @@ export const addSearchTermAsKeyword = async (
   });
   if (bid) params.append('bid', bid.toString());
   
-  const response = await api.post(`/api/v2/search-terms/${encodeURIComponent(searchTerm)}/add-keyword?${params.toString()}`);
+  const response = await api.post(`/api/search-terms/${encodeURIComponent(searchTerm)}/add-keyword?${params.toString()}`);
   return response.data;
 };
 
@@ -700,7 +721,7 @@ export const addSearchTermAsNegative = async (
     match_type: matchType,
   });
   
-  const response = await api.post(`/api/v2/search-terms/${encodeURIComponent(searchTerm)}/add-negative?${params.toString()}`);
+  const response = await api.post(`/api/search-terms/${encodeURIComponent(searchTerm)}/add-negative?${params.toString()}`);
   return response.data;
 };
 
@@ -712,7 +733,7 @@ export const getInventoryStatus = async (asin: string): Promise<{
   ad_status: string;
   is_out_of_stock: boolean;
 }> => {
-  const response = await api.get(`/api/v2/inventory-status/${asin}`);
+  const response = await api.get(`/api/inventory-status/${asin}`);
   return response.data;
 };
 
@@ -728,7 +749,7 @@ export const fetchDaypartingHeatmap = async (
   value: number;
   metric: string;
 }>> => {
-  const response = await api.get(`/api/v2/dayparting/heatmap?entity_type=${entityType}&entity_id=${entityId}&metric=${metric}&days=${days}`);
+  const response = await api.get(`/api/dayparting/heatmap?entity_type=${entityType}&entity_id=${entityId}&metric=${metric}&days=${days}`);
   return response.data;
 };
 
@@ -741,7 +762,7 @@ export const fetchDaypartingConfig = async (
   bid_multiplier: number;
   is_active: boolean;
 }>> => {
-  const response = await api.get(`/api/v2/dayparting/config?entity_type=${entityType}&entity_id=${entityId}`);
+  const response = await api.get(`/api/dayparting/config?entity_type=${entityType}&entity_id=${entityId}`);
   return response.data;
 };
 
@@ -755,7 +776,7 @@ export const saveDaypartingConfig = async (
     is_active: boolean;
   }>
 ) => {
-  const response = await api.post(`/api/v2/dayparting/config?entity_type=${entityType}&entity_id=${entityId}`, config);
+  const response = await api.post(`/api/dayparting/config?entity_type=${entityType}&entity_id=${entityId}`, config);
   return response.data;
 };
 
@@ -767,7 +788,7 @@ export const fetchAccounts = async (): Promise<Array<{
   region?: string;
   is_active: boolean;
 }>> => {
-  const response = await api.get('/api/v2/accounts');
+  const response = await api.get('/api/accounts');
   return response.data;
 };
 

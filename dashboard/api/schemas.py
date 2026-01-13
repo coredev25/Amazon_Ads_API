@@ -111,6 +111,10 @@ class CampaignResponse(BaseModel):
     ctr: float
     cvr: float
     ai_recommendation: Optional[str] = None
+    sb_ad_type: Optional[str] = None  # PRODUCT_COLLECTION, STORE_SPOTLIGHT, VIDEO
+    sd_targeting_type: Optional[str] = None  # CONTEXTUAL, AUDIENCES
+    portfolio_id: Optional[int] = None
+    portfolio_name: Optional[str] = None
 
 
 class KeywordResponse(BaseModel):

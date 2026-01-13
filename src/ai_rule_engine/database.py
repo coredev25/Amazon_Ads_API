@@ -217,12 +217,13 @@ class DatabaseConnector:
                 cursor.execute(query, (keyword_id, start_date))
                 return cursor.fetchall()
     
-    def get_campaigns_with_performance(self, days_back: int = 7) -> List[Dict[str, Any]]:
+    def get_campaigns_with_performance(self, days_back: int = 7, portfolio_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get all campaigns with their performance data
         
         Args:
             days_back: Number of days to look back
+            portfolio_id: Optional portfolio ID to filter campaigns
             
         Returns:
             List of campaigns with aggregated performance
@@ -234,6 +235,11 @@ class DatabaseConnector:
             c.campaign_status,
             c.budget_amount,
             c.budget_type,
+            c.campaign_type,
+            c.sb_ad_type,
+            c.sd_targeting_type,
+            c.portfolio_id,
+            p.portfolio_name,
             COALESCE(SUM(cp.impressions), 0) as total_impressions,
             COALESCE(SUM(cp.clicks), 0) as total_clicks,
             COALESCE(SUM(cp.cost), 0) as total_cost,
@@ -254,16 +260,27 @@ class DatabaseConnector:
         FROM campaigns c
         LEFT JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id 
             AND cp.report_date >= %s
+        LEFT JOIN portfolios p ON c.portfolio_id = p.portfolio_id
         WHERE c.campaign_status = 'ENABLED'
-        GROUP BY c.campaign_id, c.campaign_name, c.campaign_status, c.budget_amount, c.budget_type
+        """
+        
+        params = []
+        start_date = datetime.now() - timedelta(days=days_back)
+        params.append(start_date)
+        
+        if portfolio_id is not None:
+            query += " AND c.portfolio_id = %s"
+            params.append(portfolio_id)
+        
+        query += """
+        GROUP BY c.campaign_id, c.campaign_name, c.campaign_status, c.budget_amount, c.budget_type,
+                 c.campaign_type, c.sb_ad_type, c.sd_targeting_type, c.portfolio_id, p.portfolio_name
         ORDER BY total_cost DESC
         """
         
-        start_date = datetime.now() - timedelta(days=days_back)
-        
         with self.get_connection() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute(query, (start_date,))
+                cursor.execute(query, params)
                 return cursor.fetchall()
     
     def get_ad_groups_with_performance(self, campaign_id: int, days_back: int = 7) -> List[Dict[str, Any]]:

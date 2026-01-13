@@ -149,6 +149,12 @@ class AmazonAdsClient {
             throw new Error(`Duplicate request detected: ${errorDetail}`);
           }
           
+          // Handle Not Acceptable (406) - common when Accept header doesn't match
+          if (status === 406) {
+            const errorDetail = error.response?.data || {};
+            throw new Error(`Not Acceptable (406) - No matching 'Accept' header for endpoint ${endpoint}. Server detail: ${JSON.stringify(errorDetail)}. Try using vendor-specific Accept header (e.g., 'application/vnd.sbcampaign.v3+json').`);
+          }
+
           // Don't retry on these status codes
           if ([400, 401, 403, 404, 415].includes(status)) {
             const errorDetail = error.response?.data;
@@ -335,18 +341,92 @@ class AmazonAdsClient {
   }
 
   /**
+   * Normalize `requestBody.stateFilter.include` to an array of uppercase allowed states.
+   * Accepts string (comma/space-separated), array, or 'ALL'. Filters to known set: ENABLED, PAUSED, ARCHIVED.
+   */
+  normalizeStateFilter(requestBody = {}) {
+    const allowed = ['ENABLED', 'PAUSED', 'ARCHIVED'];
+    if (!requestBody.stateFilter || requestBody.stateFilter.include === undefined || requestBody.stateFilter.include === null) return requestBody;
+    let include = requestBody.stateFilter.include;
+    // Accept comma or whitespace separated strings
+    if (typeof include === 'string') {
+      include = include.split(/[,\s]+/).filter(Boolean);
+    }
+    if (!Array.isArray(include)) {
+      include = [include];
+    }
+    include = include.map(s => String(s).trim().toUpperCase());
+    // Expand 'ALL' to all allowed states
+    if (include.includes('ALL')) {
+      include = [...allowed];
+    }
+    // Keep only allowed states
+    include = include.filter(s => allowed.includes(s));
+    return { ...requestBody, stateFilter: { include: [...new Set(include)] } };
+  }
+
+  /**
+   * Helper: when a requestBody.stateFilter.include contains multiple values,
+   * perform separate calls for each state and aggregate unique results.
+   * This method normalizes string inputs ("ENABLED,PAUSED" or "ENABLED PAUSED"),
+   * expands 'ALL' into all known states, and continues on per-state failures while
+   * aggregating successful results.
+   */
+  async getAllPaginatedDataV3WithStateHandling(endpoint, requestBody = {}, customHeaders = {}) {
+    // Normalize state filter first (accept strings or arrays, and 'ALL')
+    requestBody = this.normalizeStateFilter(requestBody);
+
+    if (requestBody.stateFilter && Array.isArray(requestBody.stateFilter.include) && requestBody.stateFilter.include.length > 1) {
+      logger.warn(`stateFilter.include has multiple values (${requestBody.stateFilter.include.join(',')}); performing separate calls and aggregating results`);
+      const results = [];
+      const seenIds = new Set();
+      let lastError = null;
+      let successCount = 0;
+
+      for (const state of requestBody.stateFilter.include) {
+        const bodyForState = { ...requestBody, stateFilter: { include: [state] } };
+        try {
+          const data = await this.getAllPaginatedDataV3(endpoint, bodyForState, customHeaders);
+          successCount++;
+          for (const item of data) {
+            const id = item.id || item.campaignId || item.adGroupId || item.keywordId || item.portfolioId || JSON.stringify(item);
+            if (!seenIds.has(id)) {
+              seenIds.add(id);
+              results.push(item);
+            }
+          }
+        } catch (error) {
+          lastError = error;
+          logger.warn(`Failed fetching state ${state} from ${endpoint}: ${error.message}`);
+          // continue with other states
+          continue;
+        }
+      }
+
+      if (results.length === 0 && lastError) {
+        // If all per-state attempts failed, surface the last error
+        throw lastError;
+      }
+
+      logger.info(`Aggregated ${results.length} unique records from ${endpoint} across ${successCount} successful state(s)`);
+      return results;
+    }
+
+    return await this.getAllPaginatedDataV3(endpoint, requestBody, customHeaders);
+  }
+
+  /**
    * Get all Sponsored Products campaigns using v3 API
    * Endpoint: POST /sp/campaigns/list
    */
   async getCampaigns(filters = {}) {
     logger.info('Fetching Sponsored Products campaigns (v3 API)...');
     
-    const requestBody = {
-      // Include all states by default
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     // Add optional filters
     if (filters.campaignIdFilter) {
@@ -362,7 +442,7 @@ class AmazonAdsClient {
       'Accept': 'application/vnd.spcampaign.v3+json'
     };
 
-    return await this.getAllPaginatedDataV3('/sp/campaigns/list', requestBody, customHeaders);
+    return await this.getAllPaginatedDataV3WithStateHandling('/sp/campaigns/list', requestBody, customHeaders);
   }
 
   /**
@@ -372,11 +452,11 @@ class AmazonAdsClient {
   async getAdGroups(filters = {}) {
     logger.info('Fetching Sponsored Products ad groups (v3 API)...');
     
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     // Add optional filters
     if (filters.campaignIdFilter) {
@@ -392,7 +472,7 @@ class AmazonAdsClient {
       'Accept': 'application/vnd.spadgroup.v3+json'
     };
 
-    return await this.getAllPaginatedDataV3('/sp/adGroups/list', requestBody, customHeaders);
+    return await this.getAllPaginatedDataV3WithStateHandling('/sp/adGroups/list', requestBody, customHeaders);
   }
 
   /**
@@ -402,11 +482,11 @@ class AmazonAdsClient {
   async getKeywords(filters = {}) {
     logger.info('Fetching Sponsored Products keywords (v3 API)...');
     
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     // Add optional filters
     if (filters.campaignIdFilter) {
@@ -425,7 +505,7 @@ class AmazonAdsClient {
       'Accept': 'application/vnd.spkeyword.v3+json'
     };
 
-    return await this.getAllPaginatedDataV3('/sp/keywords/list', requestBody, customHeaders);
+    return await this.getAllPaginatedDataV3WithStateHandling('/sp/keywords/list', requestBody, customHeaders);
   }
 
   /**
@@ -435,11 +515,11 @@ class AmazonAdsClient {
   async getProductAds(filters = {}) {
     logger.info('Fetching Sponsored Products product ads (v3 API)...');
     
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     // Add optional filters
     if (filters.campaignIdFilter) {
@@ -455,7 +535,7 @@ class AmazonAdsClient {
       'Accept': 'application/vnd.spproductad.v3+json'
     };
 
-    return await this.getAllPaginatedDataV3('/sp/productAds/list', requestBody, customHeaders);
+    return await this.getAllPaginatedDataV3WithStateHandling('/sp/productAds/list', requestBody, customHeaders);
   }
 
   /**
@@ -465,11 +545,11 @@ class AmazonAdsClient {
   async getNegativeKeywords(filters = {}) {
     logger.info('Fetching Sponsored Products negative keywords (v3 API)...');
     
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     if (filters.campaignIdFilter) {
       requestBody.campaignIdFilter = filters.campaignIdFilter;
@@ -478,7 +558,7 @@ class AmazonAdsClient {
       requestBody.adGroupIdFilter = filters.adGroupIdFilter;
     }
 
-    return await this.getAllPaginatedDataV3('/sp/negativeKeywords/list', requestBody);
+    return await this.getAllPaginatedDataV3WithStateHandling('/sp/negativeKeywords/list', requestBody);
   }
 
   /**
@@ -488,31 +568,34 @@ class AmazonAdsClient {
   async getCampaignNegativeKeywords(filters = {}) {
     logger.info('Fetching Sponsored Products campaign negative keywords (v3 API)...');
     
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     if (filters.campaignIdFilter) {
       requestBody.campaignIdFilter = filters.campaignIdFilter;
     }
 
-    return await this.getAllPaginatedDataV3('/sp/campaignNegativeKeywords/list', requestBody);
+    return await this.getAllPaginatedDataV3WithStateHandling('/sp/campaignNegativeKeywords/list', requestBody);
   }
 
   /**
    * Get Sponsored Products targets (product targeting) using v3 API
    * Endpoint: POST /sp/targets/list
+   * 
+   * FIX: Added custom headers 'Content-Type' and 'Accept' to resolve 415 error.
+   * API requires 'application/vnd.sptargetingClause.v3+json' for this endpoint.
    */
   async getTargets(filters = {}) {
     logger.info('Fetching Sponsored Products targets (v3 API)...');
-    
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     if (filters.campaignIdFilter) {
       requestBody.campaignIdFilter = filters.campaignIdFilter;
@@ -521,7 +604,13 @@ class AmazonAdsClient {
       requestBody.adGroupIdFilter = filters.adGroupIdFilter;
     }
 
-    return await this.getAllPaginatedDataV3('/sp/targets/list', requestBody);
+    // v3 API requires version-specific Content-Type and Accept headers for Targets
+    const customHeaders = {
+      'Content-Type': 'application/vnd.sptargetingClause.v3+json',
+      'Accept': 'application/vnd.sptargetingClause.v3+json'
+    };
+
+    return await this.getAllPaginatedDataV3WithStateHandling('/sp/targets/list', requestBody, customHeaders);
   }
 
   /**
@@ -531,73 +620,216 @@ class AmazonAdsClient {
   async getPortfolios(filters = {}) {
     logger.info('Fetching Portfolios (v3 API)...');
     
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
-      }
-    };
+    const requestBody = {};
+    // No default stateFilter — include only if caller provides one
+    if (filters.stateFilter) {
+      requestBody.stateFilter = filters.stateFilter;
+    }
 
     if (filters.portfolioIdFilter) {
       requestBody.portfolioIdFilter = filters.portfolioIdFilter;
     }
 
-    return await this.getAllPaginatedDataV3('/portfolios/list', requestBody);
+    return await this.getAllPaginatedDataV3WithStateHandling('/portfolios/list', requestBody);
   }
 
   /**
-   * Get Sponsored Brands campaigns using v3 API
-   * Endpoint: POST /sb/campaigns/list
+   * Get Sponsored Brands campaigns using v3 API (GET /sb/campaigns)
+   * Supports filters:
+   *  - stateFilter: string, array, or object { include: [] } (e.g., 'enabled,paused' or ['enabled','paused'])
+   *  - campaignIdFilter: comma-separated string or array
+   *  - name: partial name match
+   *  - portfolioIdFilter: comma-separated string or array
+   *  - startIndex: integer (pagination start)
+   *  - count: integer (results per page, max: 100)
+   *
+   * Note: This endpoint returns an array of campaign objects. For large accounts,
+   * use `getAllSBCampaigns` which will page through results using `startIndex`/`count`.
    */
   async getSponsoredBrandsCampaigns(filters = {}) {
-    logger.info('Fetching Sponsored Brands campaigns (v3 API)...');
-    
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+    logger.info('Fetching Sponsored Brands campaigns (v3 API) via GET /sb/campaigns...');
+
+    // Build query params
+    const params = {};
+
+    // Normalize stateFilter (accept array, comma-separated string, or object { include: [] })
+    if (filters.stateFilter) {
+      if (typeof filters.stateFilter === 'object' && Array.isArray(filters.stateFilter.include)) {
+        params.stateFilter = filters.stateFilter.include.map(s => String(s).trim().toLowerCase()).join(',');
+      } else if (Array.isArray(filters.stateFilter)) {
+        params.stateFilter = filters.stateFilter.map(s => String(s).trim().toLowerCase()).join(',');
+      } else {
+        params.stateFilter = String(filters.stateFilter).trim().toLowerCase();
       }
-    };
+    } else {
+      // Default: include all common states
+      params.stateFilter = 'enabled,paused,archived';
+    }
 
     if (filters.campaignIdFilter) {
-      requestBody.campaignIdFilter = filters.campaignIdFilter;
+      params.campaignIdFilter = Array.isArray(filters.campaignIdFilter) ? filters.campaignIdFilter.join(',') : filters.campaignIdFilter;
     }
-    if (filters.nameFilter) {
-      requestBody.nameFilter = filters.nameFilter;
+
+    // Accept either `name` or `nameFilter` for backward compatibility
+    if (filters.name) {
+      params.name = filters.name;
+    } else if (filters.nameFilter) {
+      params.name = filters.nameFilter;
+    }
+
+    if (filters.portfolioIdFilter) {
+      params.portfolioIdFilter = Array.isArray(filters.portfolioIdFilter) ? filters.portfolioIdFilter.join(',') : filters.portfolioIdFilter;
+    }
+
+    if (Number.isInteger(filters.startIndex)) {
+      params.startIndex = filters.startIndex;
+    }
+    if (Number.isInteger(filters.count)) {
+      params.count = filters.count;
     }
 
     const customHeaders = {
-      'Content-Type': 'application/vnd.sbcampaign.v3+json',
       'Accept': 'application/vnd.sbcampaign.v3+json'
     };
 
-    return await this.getAllPaginatedDataV3('/sb/campaigns/list', requestBody, customHeaders);
+    // Perform a simple GET request and return the array of campaigns
+    return await this.makeRequest('GET', '/sb/campaigns', null, params, 3, 100, customHeaders);
+  }
+
+  /**
+   * Convenience: Get Sponsored Brands campaigns by array of IDs
+   * @param {Array<string|number>} campaignIds
+   */
+  async getSBCampaignsByIds(campaignIds = []) {
+    if (!Array.isArray(campaignIds) || campaignIds.length === 0) return [];
+    const idFilter = campaignIds.join(',');
+    return await this.getSponsoredBrandsCampaigns({ campaignIdFilter: idFilter });
+  }
+
+  /**
+   * Convenience: Page through all SB campaigns using startIndex/count pagination
+   * (GET /sb/campaigns supports startIndex/count). This will accumulate results
+   * until fewer than `count` items are returned.
+   */
+  async getAllSBCampaigns(filters = {}) {
+    const allCampaigns = [];
+    let startIndex = Number.isInteger(filters.startIndex) ? filters.startIndex : 0;
+    const count = Number.isInteger(filters.count) ? filters.count : 100; // max 100
+    let hasMore = true;
+
+    while (hasMore) {
+      const pageFilters = { ...filters, startIndex, count };
+      const campaigns = await this.getSponsoredBrandsCampaigns(pageFilters);
+      if (!Array.isArray(campaigns)) break;
+
+      allCampaigns.push(...campaigns);
+
+      if (campaigns.length < count) {
+        hasMore = false;
+      } else {
+        startIndex += count;
+      }
+
+      logger.info(`Fetched ${allCampaigns.length} Sponsored Brands campaigns so far...`);
+    }
+
+    return allCampaigns;
+  }
+
+  /**
+   * Convenience: Get Sponsored Brands campaigns filtered by a single state
+   * state can be: 'enabled', 'paused', or 'archived'
+   */
+  async getSBCampaignsByState(state) {
+    if (!state) return [];
+    return await this.getSponsoredBrandsCampaigns({ stateFilter: state, count: 100 });
   }
 
   /**
    * Get Sponsored Display campaigns using v3 API
-   * Endpoint: POST /sd/campaigns/list
+   * Endpoint: GET /sd/campaigns
+   * 
+   * FIX: Changed from POST to GET to resolve 405 error. 
+   * SD v3 does not support POST /sd/campaigns/list. It uses GET query params like SB.
    */
   async getSponsoredDisplayCampaigns(filters = {}) {
     logger.info('Fetching Sponsored Display campaigns (v3 API)...');
-    
-    const requestBody = {
-      stateFilter: filters.stateFilter || {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED']
+
+    // Build query params for GET request
+    const params = {};
+
+    // Normalize stateFilter (expecting comma-separated string for GET)
+    if (filters.stateFilter) {
+      if (typeof filters.stateFilter === 'object' && Array.isArray(filters.stateFilter.include)) {
+        params.stateFilter = filters.stateFilter.include.map(s => String(s).trim().toLowerCase()).join(',');
+      } else if (Array.isArray(filters.stateFilter)) {
+        params.stateFilter = filters.stateFilter.map(s => String(s).trim().toLowerCase()).join(',');
+      } else {
+        params.stateFilter = String(filters.stateFilter).trim().toLowerCase();
       }
-    };
+    } else {
+      // Default to common states
+      params.stateFilter = 'enabled,paused,archived';
+    }
 
     if (filters.campaignIdFilter) {
-      requestBody.campaignIdFilter = filters.campaignIdFilter;
-    }
-    if (filters.nameFilter) {
-      requestBody.nameFilter = filters.nameFilter;
+      params.campaignIdFilter = Array.isArray(filters.campaignIdFilter) ? filters.campaignIdFilter.join(',') : filters.campaignIdFilter;
     }
 
+    if (filters.name) {
+      params.name = filters.name;
+    } else if (filters.nameFilter) {
+      params.name = filters.nameFilter;
+    }
+
+    if (filters.portfolioIdFilter) {
+      params.portfolioIdFilter = Array.isArray(filters.portfolioIdFilter) ? filters.portfolioIdFilter.join(',') : filters.portfolioIdFilter;
+    }
+
+    if (Number.isInteger(filters.startIndex)) {
+      params.startIndex = filters.startIndex;
+    }
+    if (Number.isInteger(filters.count)) {
+      params.count = filters.count;
+    }
+
+    // FIX: Use specific Accept header for SD v3
     const customHeaders = {
-      'Content-Type': 'application/vnd.sdcampaign.v3+json',
-      'Accept': 'application/vnd.sdcampaign.v3+json'
+       'Accept': 'application/vnd.sbcampaign.v3+json'
     };
 
-    return await this.getAllPaginatedDataV3('/sd/campaigns/list', requestBody, customHeaders);
+    // Perform GET request
+    return await this.makeRequest('GET', '/sd/campaigns', null, params, 3, 100, customHeaders);
+  }
+
+  /**
+   * Convenience: Page through all Sponsored Display campaigns using startIndex/count pagination
+   * Helper method to aggregate results since GET does not support nextToken body pagination.
+   */
+  async getAllSponsoredDisplayCampaigns(filters = {}) {
+    const allCampaigns = [];
+    let startIndex = Number.isInteger(filters.startIndex) ? filters.startIndex : 0;
+    const count = Number.isInteger(filters.count) ? filters.count : 100; // Max usually 100
+    let hasMore = true;
+
+    while (hasMore) {
+      const pageFilters = { ...filters, startIndex, count };
+      const campaigns = await this.getSponsoredDisplayCampaigns(pageFilters);
+      
+      if (!Array.isArray(campaigns)) break;
+
+      allCampaigns.push(...campaigns);
+
+      if (campaigns.length < count) {
+        hasMore = false;
+      } else {
+        startIndex += count;
+      }
+
+      logger.info(`Fetched ${allCampaigns.length} Sponsored Display campaigns so far...`);
+    }
+
+    return allCampaigns;
   }
 
   /**

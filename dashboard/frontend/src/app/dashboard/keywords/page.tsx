@@ -16,6 +16,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import DataTable from '@/components/DataTable';
+import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
 import { fetchKeywords, updateKeywordBid, lockKeywordBid, unlockKeywordBid, type Keyword } from '@/utils/api';
 import {
   formatCurrency,
@@ -27,7 +28,10 @@ import {
 } from '@/utils/helpers';
 
 export default function KeywordsPage() {
-  const [dateRange, setDateRange] = useState(7);
+  const [dateRange, setDateRange] = useState<DateRange>({
+    type: 'last_7_days',
+    days: 7,
+  });
   const [matchTypeFilter, setMatchTypeFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
   const [editingKeyword, setEditingKeyword] = useState<number | null>(null);
@@ -36,9 +40,12 @@ export default function KeywordsPage() {
   
   const queryClient = useQueryClient();
 
+  // Calculate days from dateRange
+  const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
+
   const { data: keywords, isLoading, refetch } = useQuery({
-    queryKey: ['keywords', dateRange],
-    queryFn: () => fetchKeywords({ days: dateRange, limit: 200 }),
+    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString()],
+    queryFn: () => fetchKeywords({ days, limit: 200 }),
   });
 
   const bidMutation = useMutation({
@@ -368,15 +375,7 @@ export default function KeywordsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <select
-            value={dateRange}
-            onChange={(e) => setDateRange(Number(e.target.value))}
-            className="select"
-          >
-            <option value={7}>Last 7 Days</option>
-            <option value={14}>Last 14 Days</option>
-            <option value={30}>Last 30 Days</option>
-          </select>
+          <DateRangePicker value={dateRange} onChange={setDateRange} />
           <button
             onClick={() => refetch()}
             className="btn btn-secondary"
