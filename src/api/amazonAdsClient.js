@@ -152,7 +152,21 @@ class AmazonAdsClient {
           // Handle Not Acceptable (406) - common when Accept header doesn't match
           if (status === 406) {
             const errorDetail = error.response?.data || {};
-            throw new Error(`Not Acceptable (406) - No matching 'Accept' header for endpoint ${endpoint}. Server detail: ${JSON.stringify(errorDetail)}. Try using vendor-specific Accept header (e.g., 'application/vnd.sbcampaign.v3+json').`);
+            const endpointLower = String(endpoint).toLowerCase();
+            // Suggest a likely vendor-specific header based on endpoint path
+            let suggestedHeader = "application/vnd.spcampaign.v3+json"; // default
+            if (endpointLower.includes('/sb/')) {
+              suggestedHeader = 'application/vnd.sbcampaign.v3+json';
+            } else if (endpointLower.includes('/sd/')) {
+              // Sponsored Display requires 'application/vnd.sdcampaigns.v3+json' (plural 'campaigns')
+              suggestedHeader = 'application/vnd.sdcampaigns.v3+json';
+            } else if (endpointLower.includes('/sp/targets')) {
+              suggestedHeader = 'application/vnd.sptargetingClause.v3+json';
+            } else if (endpointLower.includes('/sp/') && endpointLower.includes('campaign')) {
+              suggestedHeader = 'application/vnd.spcampaign.v3+json';
+            }
+
+            throw new Error(`Not Acceptable (406) - No matching 'Accept' header for endpoint ${endpoint}. Server detail: ${JSON.stringify(errorDetail)}. Try using vendor-specific Accept header (e.g., '${suggestedHeader}').`);
           }
 
           // Don't retry on these status codes
@@ -163,7 +177,29 @@ class AmazonAdsClient {
             } else if (status === 401) {
               throw new Error('Authentication failed. Please check your API credentials.');
             } else if (status === 403) {
-              throw new Error('Access forbidden. Please check your API permissions and profile ID.');
+              // Provide specific guidance for Sponsored Brands and Sponsored Display 403 errors
+              const endpointLower = String(endpoint).toLowerCase();
+              let errorMessage = 'Access forbidden. Please check your API permissions and profile ID.';
+              
+              if (endpointLower.includes('/sb/')) {
+                errorMessage = 'Access forbidden (403) for Sponsored Brands. ' +
+                  'This usually means: (1) Your app is not approved for Sponsored Brands access, ' +
+                  '(2) The profile ID is not brand-enabled, or (3) The refresh token lacks Sponsored Brands scope. ' +
+                  'Please verify: (a) Amazon Developer Console shows SB permissions enabled, ' +
+                  '(b) Profile ID is from a brand-enabled account (vendor type), ' +
+                  '(c) Refresh token includes cpc_advertising:campaign_management scope. ' +
+                  'Visit: https://advertising.amazon.com/API/docs/en-us/setting-up/step-1-create-an-application';
+              } else if (endpointLower.includes('/sd/')) {
+                errorMessage = 'Access forbidden (403) for Sponsored Display. ' +
+                  'This usually means: (1) Your app is not approved for Sponsored Display access, ' +
+                  '(2) The profile ID does not have SD permissions, or (3) The refresh token lacks Sponsored Display scope. ' +
+                  'Please verify: (a) Amazon Developer Console shows SD permissions enabled, ' +
+                  '(b) Profile ID has Sponsored Display access, ' +
+                  '(c) Refresh token includes cpc_advertising:campaign_management scope. ' +
+                  'Visit: https://advertising.amazon.com/API/docs/en-us/setting-up/step-1-create-an-application';
+              }
+              
+              throw new Error(errorMessage);
             } else if (status === 415) {
               throw new Error(`Unsupported Media Type (415) - Endpoint: ${method} ${endpoint}. Error: ${JSON.stringify(errorDetail)}`);
             } else if (status === 400) {
@@ -793,9 +829,10 @@ class AmazonAdsClient {
       params.count = filters.count;
     }
 
-    // FIX: Use specific Accept header for SD v3
+    // FIX: Use specific Accept header for SD v3 (note: plural 'campaigns' required)
+    // Sponsored Display v3 requires 'application/vnd.sdcampaigns.v3+json' (not 'sdcampaign')
     const customHeaders = {
-       'Accept': 'application/vnd.sbcampaign.v3+json'
+       'Accept': 'application/vnd.sdcampaigns.v3+json'
     };
 
     // Perform GET request

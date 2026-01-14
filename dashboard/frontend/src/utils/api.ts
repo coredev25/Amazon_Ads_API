@@ -609,6 +609,15 @@ export const fetchAdGroups = async (campaignId?: number, days: number = 7): Prom
   return response.data;
 };
 
+// Ads (Product Ads/Creatives)
+export const fetchAds = async (campaignId?: number, adGroupId?: number, days: number = 7): Promise<any[]> => {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (campaignId) params.append('campaign_id', campaignId.toString());
+  if (adGroupId) params.append('ad_group_id', adGroupId.toString());
+  const response = await api.get(`/api/ads?${params.toString()}`);
+  return response.data;
+};
+
 // Product Targeting
 export const fetchProductTargeting = async (campaignId?: number, adGroupId?: number, days: number = 7): Promise<ProductTarget[]> => {
   const params = new URLSearchParams({ days: days.toString() });

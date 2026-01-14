@@ -13,7 +13,7 @@ import {
   ArrowLeft,
   FileDown,
 } from 'lucide-react';
-import DataTable from '@/components/DataTable';
+import SmartGrid from '@/components/SmartGrid';
 import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
 import { fetchChangeHistory, type ChangeHistoryEntry } from '@/utils/api';
 import { formatRelativeTime, cn } from '@/utils/helpers';
@@ -201,7 +201,7 @@ export default function ChangeHistoryPage() {
 
       {/* Change History Table */}
       <div id="change-history-table">
-        <DataTable
+        <SmartGrid
           data={filteredHistory}
         columns={[
           {

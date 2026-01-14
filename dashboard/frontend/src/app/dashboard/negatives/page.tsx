@@ -14,7 +14,7 @@ import {
   Eye,
   RefreshCw,
 } from 'lucide-react';
-import DataTable from '@/components/DataTable';
+import SmartGrid from '@/components/SmartGrid';
 import {
   fetchNegativeCandidates,
   approveNegativeKeyword,
@@ -374,7 +374,7 @@ export default function NegativesPage() {
       </div>
 
       {/* Data Table */}
-      <DataTable
+      <SmartGrid
         data={filteredCandidates || []}
         columns={columns}
         keyField="keyword_id"

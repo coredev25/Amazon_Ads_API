@@ -15,7 +15,7 @@ import {
   Unlock,
   AlertCircle,
 } from 'lucide-react';
-import DataTable from '@/components/DataTable';
+import SmartGrid from '@/components/SmartGrid';
 import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
 import { fetchKeywords, updateKeywordBid, lockKeywordBid, unlockKeywordBid, type Keyword } from '@/utils/api';
 import {
@@ -475,13 +475,22 @@ export default function KeywordsPage() {
       )}
 
       {/* Data Table */}
-      <DataTable
+      <SmartGrid
         data={filteredKeywords || []}
         columns={columns}
         keyField="keyword_id"
         loading={isLoading}
         emptyMessage="No keywords found"
         className="[&_tbody_tr]:group"
+        onCellEdit={async (row, column, newValue) => {
+          if (column === 'bid') {
+            await updateKeywordBid((row as Keyword).keyword_id, {
+              new_value: parseFloat(newValue),
+              old_value: (row as Keyword).bid,
+            });
+            queryClient.invalidateQueries({ queryKey: ['keywords'] });
+          }
+        }}
       />
     </div>
   );

@@ -40,7 +40,7 @@ export default function HierarchicalTabs({
 
   return (
     <div className="space-y-4">
-      {/* Breadcrumbs */}
+      {/* Breadcrumbs - Format: All Campaigns > [Campaign Name] > Ad Groups */}
       {breadcrumbs.length > 0 && (
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <button
@@ -60,6 +60,15 @@ export default function HierarchicalTabs({
               </button>
             </React.Fragment>
           ))}
+          {/* Show current tab name if we're in a drill-down view */}
+          {activeTab !== 'campaigns' && activeTab !== breadcrumbs[breadcrumbs.length - 1]?.type && (
+            <>
+              <ChevronRight className="w-4 h-4" />
+              <span className="text-gray-500 dark:text-gray-500">
+                {tabConfig[activeTab].label}
+              </span>
+            </>
+          )}
         </div>
       )}
 

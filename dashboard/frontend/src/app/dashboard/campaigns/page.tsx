@@ -12,12 +12,12 @@ import {
   Package,
   AlertTriangle,
   FileDown,
+  FileText,
   Target,
   Settings,
   ChevronDown,
 } from 'lucide-react';
 import { exportDashboardToPDF } from '@/utils/pdfExport';
-import DataTable from '@/components/DataTable';
 import SmartGrid from '@/components/SmartGrid';
 import HierarchicalTabs, { type TabType } from '@/components/HierarchicalTabs';
 import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
@@ -27,6 +27,7 @@ import {
   fetchCampaigns,
   fetchPortfolios,
   fetchAdGroups,
+  fetchAds,
   fetchKeywords,
   fetchProductTargeting,
   fetchSearchTerms,
@@ -77,7 +78,7 @@ export default function HierarchicalCampaignManager() {
     enabled: activeTab === 'campaigns',
   });
 
-  // Breadcrumbs
+  // Breadcrumbs - Show "All Campaigns > [Campaign Name] > Ad Groups" format
   const breadcrumbs = useMemo(() => {
     const crumbs = [];
     if (selectedCampaign) {
@@ -106,6 +107,12 @@ export default function HierarchicalCampaignManager() {
     queryKey: ['ad-groups', selectedCampaign?.id, days],
     queryFn: () => fetchAdGroups(selectedCampaign?.id, days),
     enabled: activeTab === 'ad_groups' && selectedCampaign !== null,
+  });
+
+  const { data: ads, isLoading: adsLoading } = useQuery({
+    queryKey: ['ads', selectedCampaign?.id, selectedAdGroup?.id, days],
+    queryFn: () => fetchAds(selectedCampaign?.id, selectedAdGroup?.id, days),
+    enabled: activeTab === 'ads' && (selectedCampaign !== null || selectedAdGroup !== null),
   });
 
   const { data: keywords, isLoading: keywordsLoading } = useQuery({
@@ -142,28 +149,48 @@ export default function HierarchicalCampaignManager() {
   });
 
   const handleTabChange = (tab: TabType) => {
-    setActiveTab(tab);
-    // Reset selections when switching tabs
-    if (tab === 'campaigns') {
+    // Allow navigation to top-level tabs (portfolios, campaigns) - reset selections
+    if (tab === 'portfolios' || tab === 'campaigns') {
       setSelectedCampaign(null);
       setSelectedAdGroup(null);
-    } else if (tab === 'ad_groups' && !selectedCampaign) {
+      setActiveTab(tab);
+    } 
+    // For drill-down tabs, require proper context
+    else if (tab === 'ad_groups' && !selectedCampaign) {
       // If switching to ad_groups without a selected campaign, stay on campaigns
       setActiveTab('campaigns');
+    } else if ((tab === 'ads' || tab === 'keywords' || tab === 'targeting' || tab === 'search_terms') && !selectedAdGroup && !selectedCampaign) {
+      // If switching to child tabs without context, go back to campaigns
+      setActiveTab('campaigns');
+    } else if (tab === 'placements' && !selectedCampaign) {
+      // Placements require a campaign
+      setActiveTab('campaigns');
+    } else {
+      // Valid navigation - allow it
+      setActiveTab(tab);
     }
   };
 
   const handleBreadcrumbClick = (item: { type: TabType; id?: number; name?: string }) => {
-    if (item.type === 'campaigns') {
+    if (item.type === 'campaigns' && !item.id) {
+      // "All Campaigns" clicked - reset everything
       setSelectedCampaign(null);
       setSelectedAdGroup(null);
       setActiveTab('campaigns');
-    } else if (item.type === 'ad_groups' && item.id) {
+    } else if (item.type === 'campaigns' && item.id) {
+      // Campaign name clicked - go to ad groups for that campaign
       const campaign = campaigns?.find(c => c.campaign_id === item.id);
       if (campaign) {
         setSelectedCampaign({ id: campaign.campaign_id, name: campaign.campaign_name });
         setSelectedAdGroup(null);
         setActiveTab('ad_groups');
+      }
+    } else if (item.type === 'ad_groups' && item.id) {
+      // Ad group name clicked - go to keywords for that ad group
+      const adGroup = adGroups?.find(ag => ag.ad_group_id === item.id);
+      if (adGroup) {
+        setSelectedAdGroup({ id: adGroup.ad_group_id, name: adGroup.ad_group_name });
+        setActiveTab('keywords');
       }
     }
   };
@@ -185,6 +212,7 @@ export default function HierarchicalCampaignManager() {
       (activeTab === 'portfolios' && portfoliosLoading) ||
       (activeTab === 'campaigns' && campaignsLoading) ||
       (activeTab === 'ad_groups' && adGroupsLoading) ||
+      (activeTab === 'ads' && adsLoading) ||
       (activeTab === 'keywords' && keywordsLoading) ||
       (activeTab === 'targeting' && targetingLoading) ||
       (activeTab === 'search_terms' && searchTermsLoading) ||
@@ -216,6 +244,16 @@ export default function HierarchicalCampaignManager() {
           );
         }
         return renderAdGroups();
+      case 'ads':
+        if (!selectedCampaign && !selectedAdGroup) {
+          return (
+            <div className="card p-8 text-center text-gray-500">
+              <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p>Select a campaign or ad group to view ads</p>
+            </div>
+          );
+        }
+        return renderAds();
       case 'keywords':
         if (!selectedAdGroup) {
           return (
@@ -268,7 +306,7 @@ export default function HierarchicalCampaignManager() {
     }) || [];
 
     return (
-      <DataTable
+      <SmartGrid
         data={filtered}
         columns={[
           {
@@ -334,6 +372,8 @@ export default function HierarchicalCampaignManager() {
         keyField="portfolio_id"
         loading={portfoliosLoading}
         emptyMessage="No portfolios found"
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
       />
     );
   };
@@ -345,78 +385,88 @@ export default function HierarchicalCampaignManager() {
     }) || [];
 
     return (
-      <DataTable
-        data={filtered}
-        showToolbar={true}
-        toolbarLeft={
-          <>
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-gray-400" />
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="select text-sm"
-              >
-                <option value="all">All Status</option>
-                <option value="enabled">Enabled</option>
-                <option value="paused">Paused</option>
-                <option value="archived">Archived</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <select
-                value={portfolioFilter || ''}
-                onChange={(e) => setPortfolioFilter(e.target.value ? parseInt(e.target.value) : undefined)}
-                className="select text-sm"
-              >
-                <option value="">All Portfolios</option>
-                {portfolios?.map((p: Portfolio) => (
-                  <option key={p.portfolio_id} value={p.portfolio_id.toString()}>
-                    {p.portfolio_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {selectedRows.size > 0 && (
-              <div className="flex items-center gap-2 ml-4 pl-4 border-l border-gray-200 dark:border-gray-700">
-                <span className="text-sm text-gray-600 dark:text-gray-400">
-                  {selectedRows.size} selected
-                </span>
-                <button
-                  onClick={() => setShowPortfolioModal(true)}
-                  className="btn btn-sm btn-secondary"
+      <div className="space-y-4">
+        {/* Toolbar */}
+        <div className="card p-4 border border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <select
+                  value={portfolioFilter || ''}
+                  onChange={(e) => setPortfolioFilter(e.target.value ? parseInt(e.target.value) : undefined)}
+                  className="select text-sm"
                 >
-                  <Package className="w-4 h-4" />
-                  Add to Portfolio
-                </button>
+                  <option value="">All Portfolios</option>
+                  {portfolios?.map((p: Portfolio) => (
+                    <option key={p.portfolio_id} value={p.portfolio_id.toString()}>
+                      {p.portfolio_name}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
-          </>
-        }
-        toolbarRight={
-          <>
-            <DateRangePicker value={dateRange} onChange={setDateRange} />
-            <button
-              className="btn btn-sm btn-secondary"
-              title="Settings"
-            >
-              <Settings className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => {
-                exportDashboardToPDF('campaign-manager-content', `campaign-manager-${new Date().toISOString().split('T')[0]}.pdf`)
-                  .catch(err => console.error('PDF export failed:', err));
-              }}
-              className="btn btn-sm btn-secondary"
-            >
-              <FileDown className="w-4 h-4" />
-              Export
-            </button>
-          </>
-        }
-        columnModalOpen={showColumnModal}
-        onColumnModalClose={() => setShowColumnModal(false)}
-        onColumnsClick={() => setShowColumnModal(true)}
+            </div>
+            <div className="flex items-center gap-2">
+              <DateRangePicker value={dateRange} onChange={setDateRange} />
+              <button
+                className="btn btn-sm btn-secondary"
+                title="Settings"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => {
+                  exportDashboardToPDF('campaign-manager-content', `campaign-manager-${new Date().toISOString().split('T')[0]}.pdf`)
+                    .catch(err => console.error('PDF export failed:', err));
+                }}
+                className="btn btn-sm btn-secondary"
+              >
+                <FileDown className="w-4 h-4" />
+                Export
+              </button>
+            </div>
+          </div>
+        </div>
+        <SmartGrid
+          data={filtered}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+          statusFilterOptions={[
+            { value: 'all', label: 'All Status' },
+            { value: 'enabled', label: 'Enabled' },
+            { value: 'paused', label: 'Paused' },
+            { value: 'archived', label: 'Archived' },
+          ]}
+          enableSelection
+          selectedRows={selectedRows as unknown as Set<string | number>}
+          onSelectRow={(id) => {
+            const newSelection = new Set(selectedRows);
+            if (newSelection.has(id as number)) {
+              newSelection.delete(id as number);
+            } else {
+              newSelection.add(id as number);
+            }
+            setSelectedRows(newSelection);
+          }}
+          onSelectAllRows={(ids, select) => {
+            const newSelection = new Set(selectedRows);
+            if (select) {
+              // Select all provided IDs
+              ids.forEach(id => newSelection.add(id as number));
+            } else {
+              // Deselect all provided IDs
+              ids.forEach(id => newSelection.delete(id as number));
+            }
+            setSelectedRows(newSelection);
+          }}
+          onBulkAction={async (action, ids, params) => {
+            if (action === 'move_to_portfolio' && params?.portfolioId) {
+              await bulkAddCampaignsToPortfolio(ids.map(id => Number(id)), params.portfolioId);
+            } else if (action === 'pause' || action === 'enable' || action === 'archive') {
+              // Bulk status changes - implement based on your API requirements
+              console.log(`Bulk ${action} action for ${ids.length} campaigns`);
+            }
+            queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+          }}
         columns={[
           {
             key: 'campaign_name',
@@ -534,19 +584,9 @@ export default function HierarchicalCampaignManager() {
         ]}
         keyField="campaign_id"
         loading={campaignsLoading}
-        enableSelection
-        selectedRows={selectedRows as unknown as Set<string | number>}
-        onSelectRow={(id) => {
-          const newSelection = new Set(selectedRows);
-          if (newSelection.has(id as number)) {
-            newSelection.delete(id as number);
-          } else {
-            newSelection.add(id as number);
-          }
-          setSelectedRows(newSelection);
-        }}
         emptyMessage="No campaigns found"
-      />
+        />
+      </div>
     );
   };
 
@@ -557,8 +597,10 @@ export default function HierarchicalCampaignManager() {
     }) || [];
 
     return (
-      <DataTable
+      <SmartGrid
         data={filtered}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
         columns={[
           {
             key: 'ad_group_name',
@@ -633,6 +675,119 @@ export default function HierarchicalCampaignManager() {
     );
   };
 
+  const renderAds = () => {
+    const filtered = ads?.filter(ad => {
+      if (statusFilter === 'all') return true;
+      return ad.status?.toLowerCase() === statusFilter.toLowerCase();
+    }) || [];
+
+    return (
+      <SmartGrid
+        data={filtered}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        columns={[
+          {
+            key: 'asin',
+            header: 'ASIN',
+            sortable: true,
+            render: (value: unknown, row: any) => (
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-gray-900 dark:text-white">{value as string}</span>
+                {row.inventory_status && (
+                  <InventoryBadge inventoryStatus={row.inventory_status} />
+                )}
+              </div>
+            ),
+          },
+          {
+            key: 'sku',
+            header: 'SKU',
+            sortable: true,
+            render: (value: unknown) => (
+              <span className="text-gray-600 dark:text-gray-400">{value as string || '-'}</span>
+            ),
+          },
+          {
+            key: 'status',
+            header: 'Status',
+            sortable: true,
+            render: (value: unknown, row: any) => (
+              <span className={cn('badge', getStatusBadge(row.status))}>
+                {row.status}
+              </span>
+            ),
+          },
+          {
+            key: 'impressions',
+            header: 'Impressions',
+            sortable: true,
+            className: 'text-right',
+            render: (value: unknown) => formatNumber(value as number),
+          },
+          {
+            key: 'clicks',
+            header: 'Clicks',
+            sortable: true,
+            className: 'text-right',
+            render: (value: unknown) => formatNumber(value as number),
+          },
+          {
+            key: 'spend',
+            header: 'Spend',
+            sortable: true,
+            className: 'text-right',
+            render: (value: unknown) => (
+              <span className="font-mono">{formatCurrency(value as number)}</span>
+            ),
+          },
+          {
+            key: 'sales',
+            header: 'Sales',
+            sortable: true,
+            className: 'text-right',
+            render: (value: unknown) => (
+              <span className="font-mono text-green-400">{formatCurrency(value as number)}</span>
+            ),
+          },
+          {
+            key: 'acos',
+            header: 'ACOS',
+            sortable: true,
+            className: 'text-right',
+            render: (value: unknown, row: any) => {
+              const acos = row.acos;
+              const color = acos === null ? 'text-gray-400' :
+                acos < 9 ? 'text-green-400' :
+                acos < 15 ? 'text-yellow-400' :
+                'text-red-400';
+              return <span className={cn('font-mono', color)}>{formatAcos(acos)}</span>;
+            },
+          },
+          {
+            key: 'roas',
+            header: 'ROAS',
+            sortable: true,
+            className: 'text-right',
+            render: (value: unknown) => (
+              <span className="font-mono">{formatRoas(value as number)}</span>
+            ),
+          },
+          {
+            key: 'orders',
+            header: 'Orders',
+            sortable: true,
+            className: 'text-right',
+            render: (value: unknown) => formatNumber(value as number),
+          },
+        ]}
+        keyField="ad_id"
+        loading={adsLoading}
+        emptyMessage="No ads found"
+      />
+    );
+  };
+
   const renderKeywords = () => {
     const filtered = keywords?.filter(k => {
       if (statusFilter === 'all') return true;
@@ -640,8 +795,10 @@ export default function HierarchicalCampaignManager() {
     }) || [];
 
     return (
-      <DataTable
+      <SmartGrid
         data={filtered}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
         columns={[
           {
             key: 'keyword_text',
@@ -717,7 +874,7 @@ export default function HierarchicalCampaignManager() {
 
   const renderTargeting = () => {
     return (
-      <DataTable
+      <SmartGrid
         data={targeting || []}
         columns={[
           {
@@ -811,7 +968,7 @@ export default function HierarchicalCampaignManager() {
 
   const renderSearchTerms = () => {
     return (
-      <DataTable
+      <SmartGrid
         data={searchTerms || []}
         columns={[
           {
@@ -904,7 +1061,7 @@ export default function HierarchicalCampaignManager() {
 
   const renderPlacements = () => {
     return (
-      <DataTable
+      <SmartGrid
         data={placements || []}
         columns={[
           {

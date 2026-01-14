@@ -3067,6 +3067,96 @@ async def get_product_targeting(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/ads", response_model=List[AdData])
+async def get_ads(
+    campaign_id: Optional[int] = None,
+    ad_group_id: Optional[int] = None,
+    days: int = Query(7, ge=1, le=90)
+):
+    """Get product ads (creatives/ASIN level) with performance data"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                query = """
+                    SELECT pa.ad_id, pa.asin, pa.sku, pa.campaign_id, pa.ad_group_id, pa.state as status
+                    FROM product_ads pa
+                    WHERE 1=1
+                """
+                params = []
+                
+                if campaign_id:
+                    query += " AND pa.campaign_id = %s"
+                    params.append(campaign_id)
+                
+                if ad_group_id:
+                    query += " AND pa.ad_group_id = %s"
+                    params.append(ad_group_id)
+                
+                cursor.execute(query, params)
+                ads = cursor.fetchall()
+                
+                result = []
+                end_date = datetime.now().date()
+                start_date = end_date - timedelta(days=days)
+                
+                for ad in ads:
+                    ad_id = ad['ad_id']
+                    asin = ad['asin']
+                    
+                    # Get performance data from asin_performance
+                    cursor.execute("""
+                        SELECT 
+                            SUM(impressions) as total_impressions,
+                            SUM(clicks) as total_clicks,
+                            SUM(cost) as total_spend,
+                            SUM(attributed_sales_7d) as total_sales,
+                            SUM(attributed_conversions_7d) as total_orders
+                        FROM asin_performance ap
+                        WHERE ap.asin = %s
+                        AND ap.report_date >= %s
+                        AND ap.report_date <= %s
+                    """, (asin, start_date, end_date))
+                    
+                    perf = cursor.fetchone()
+                    spend = float(perf['total_spend'] or 0)
+                    sales = float(perf['total_sales'] or 0)
+                    impressions = int(perf['total_impressions'] or 0)
+                    clicks = int(perf['total_clicks'] or 0)
+                    orders = int(perf['total_orders'] or 0)
+                    
+                    # Get inventory status if available
+                    inventory_status = None
+                    cursor.execute("""
+                        SELECT ad_status FROM inventory_health WHERE asin = %s LIMIT 1
+                    """, (asin,))
+                    inv_result = cursor.fetchone()
+                    if inv_result:
+                        inventory_status = inv_result['ad_status']
+                    
+                    result.append(AdData(
+                        ad_id=ad_id,
+                        asin=asin,
+                        sku=ad.get('sku'),
+                        campaign_id=ad['campaign_id'],
+                        ad_group_id=ad['ad_group_id'],
+                        status=ad['status'],
+                        spend=spend,
+                        sales=sales,
+                        acos=round(spend / sales * 100, 2) if sales > 0 else None,
+                        roas=round(sales / spend, 2) if spend > 0 else None,
+                        orders=orders,
+                        impressions=impressions,
+                        clicks=clicks,
+                        inventory_status=inventory_status
+                    ))
+                
+                return result
+    except Exception as e:
+        logger.error(f"Error fetching ads: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/search-terms", response_model=List[SearchTermData])
 async def get_search_terms(
     campaign_id: Optional[int] = None,
