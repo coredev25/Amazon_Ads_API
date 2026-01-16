@@ -11,6 +11,8 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  ReferenceLine,
+  Cell,
 } from 'recharts';
 import { Eye, MousePointerClick, TrendingUp, DollarSign, Target, Activity } from 'lucide-react';
 import { formatCurrency, formatPercentage, cn } from '@/utils/helpers';
@@ -37,9 +39,17 @@ interface PreviousPeriodDataPoint {
   roas: number;
 }
 
+export interface EventAnnotation {
+  date: string;
+  type: 'price_change' | 'bid_rule_applied' | 'budget_change' | 'status_change' | 'other';
+  label: string;
+  description?: string;
+}
+
 interface MasterPerformanceChartProps {
   data: ChartDataPoint[];
   previousPeriodData?: PreviousPeriodDataPoint[];
+  eventAnnotations?: EventAnnotation[];
   height?: number;
   className?: string;
 }
@@ -80,6 +90,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export default function MasterPerformanceChart({
   data,
   previousPeriodData,
+  eventAnnotations = [],
   height = 400,
   className,
 }: MasterPerformanceChartProps) {
@@ -117,6 +128,22 @@ export default function MasterPerformanceChart({
   // Determine which metrics use left vs right axis
   const leftAxisMetrics = ['spend', 'sales', 'impressions', 'clicks'];
   const rightAxisMetrics = ['acos', 'cpc', 'ctr', 'cvr', 'roas'];
+
+  // Get event annotation color based on type
+  const getEventColor = (type: EventAnnotation['type']) => {
+    switch (type) {
+      case 'price_change':
+        return '#EF4444'; // Red
+      case 'bid_rule_applied':
+        return '#3B82F6'; // Blue
+      case 'budget_change':
+        return '#F59E0B'; // Amber
+      case 'status_change':
+        return '#8B5CF6'; // Purple
+      default:
+        return '#6B7280'; // Gray
+    }
+  };
 
   return (
     <div className={cn('space-y-4', className)}>
@@ -188,6 +215,29 @@ export default function MasterPerformanceChart({
               wrapperStyle={{ paddingTop: '20px' }}
               iconType="circle"
             />
+
+            {/* Event Annotations */}
+            {eventAnnotations.map((event, index) => {
+              const eventDataPoint = data.find(d => d.date === event.date);
+              if (!eventDataPoint) return null;
+              
+              return (
+                <ReferenceLine
+                  key={`event-${index}`}
+                  x={event.date}
+                  stroke={getEventColor(event.type)}
+                  strokeWidth={2}
+                  strokeDasharray="3 3"
+                  label={{
+                    value: event.label,
+                    position: 'top',
+                    fill: getEventColor(event.type),
+                    fontSize: 11,
+                    fontWeight: 'bold',
+                  }}
+                />
+              );
+            })}
 
             {/* Left Axis Metrics (Bars) */}
             {visibleMetrics.spend && (
@@ -294,14 +344,12 @@ export default function MasterPerformanceChart({
             )}
 
             {/* Previous Period Comparison (Dotted Lines) */}
-            {previousPeriodData && visibleMetrics.spend && (
+            {previousPeriodData && previousPeriodData.length > 0 && visibleMetrics.spend && (
               <Line
                 yAxisId="left"
                 type="monotone"
-                dataKey={(entry: any) => {
-                  const prev = previousPeriodData.find((p) => p.date === entry.date);
-                  return prev?.spend;
-                }}
+                data={previousPeriodData}
+                dataKey="spend"
                 name="Previous Spend"
                 stroke="#FF9900"
                 strokeWidth={2}
@@ -310,16 +358,42 @@ export default function MasterPerformanceChart({
                 strokeOpacity={0.5}
               />
             )}
-            {previousPeriodData && visibleMetrics.acos && (
+            {previousPeriodData && previousPeriodData.length > 0 && visibleMetrics.acos && (
               <Line
                 yAxisId="right"
                 type="monotone"
-                dataKey={(entry: any) => {
-                  const prev = previousPeriodData.find((p) => p.date === entry.date);
-                  return prev?.acos;
-                }}
+                data={previousPeriodData}
+                dataKey="acos"
                 name="Previous ACOS"
                 stroke="#F59E0B"
+                strokeWidth={2}
+                dot={false}
+                strokeDasharray="5 5"
+                strokeOpacity={0.5}
+              />
+            )}
+            {previousPeriodData && previousPeriodData.length > 0 && visibleMetrics.sales && (
+              <Line
+                yAxisId="left"
+                type="monotone"
+                data={previousPeriodData}
+                dataKey="sales"
+                name="Previous Sales"
+                stroke="#10B981"
+                strokeWidth={2}
+                dot={false}
+                strokeDasharray="5 5"
+                strokeOpacity={0.5}
+              />
+            )}
+            {previousPeriodData && previousPeriodData.length > 0 && visibleMetrics.roas && (
+              <Line
+                yAxisId="right"
+                type="monotone"
+                data={previousPeriodData}
+                dataKey="roas"
+                name="Previous ROAS"
+                stroke="#10B981"
                 strokeWidth={2}
                 dot={false}
                 strokeDasharray="5 5"

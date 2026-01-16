@@ -21,7 +21,7 @@ import { exportDashboardToPDF } from '@/utils/pdfExport';
 import SmartGrid from '@/components/SmartGrid';
 import HierarchicalTabs, { type TabType } from '@/components/HierarchicalTabs';
 import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
-import MasterPerformanceChart from '@/components/MasterPerformanceChart';
+import MasterPerformanceChart, { type EventAnnotation } from '@/components/MasterPerformanceChart';
 import InventoryBadge from '@/components/InventoryBadge';
 import {
   fetchCampaigns,
@@ -39,6 +39,7 @@ import {
   fetchTrends,
   addCampaignToPortfolio,
   bulkAddCampaignsToPortfolio,
+  fetchEventAnnotations,
   type Campaign,
   type SearchTerm,
   type Portfolio,
@@ -73,10 +74,40 @@ export default function HierarchicalCampaignManager() {
 
   // Fetch trends for master chart
   const { data: trends } = useQuery({
-    queryKey: ['trends', days],
-    queryFn: () => fetchTrends(days),
+    queryKey: ['trends', days, dateRange.startDate, dateRange.endDate],
+    queryFn: () => {
+      if (dateRange.type === 'custom' && dateRange.startDate && dateRange.endDate) {
+        return fetchTrends(undefined, dateRange.startDate, dateRange.endDate);
+      }
+      return fetchTrends(days);
+    },
     enabled: activeTab === 'campaigns',
   });
+
+  // Fetch event annotations for chart
+  const { data: eventAnnotations = [] } = useQuery<EventAnnotation[]>({
+    queryKey: ['eventAnnotations', days, dateRange.startDate, dateRange.endDate],
+    queryFn: () => {
+      if (dateRange.type === 'custom' && dateRange.startDate && dateRange.endDate) {
+        return fetchEventAnnotations(undefined, dateRange.startDate, dateRange.endDate);
+      }
+      return fetchEventAnnotations(days);
+    },
+    enabled: activeTab === 'campaigns',
+  });
+
+  // Calculate previous period data for comparison
+  const previousPeriodData = useMemo(() => {
+    if (!trends || trends.length === 0) return undefined;
+    
+    const periodLength = trends.length;
+    const previousStartDate = new Date(trends[0].date);
+    previousStartDate.setDate(previousStartDate.getDate() - periodLength);
+    
+    // For now, return undefined - this would need to fetch actual previous period data
+    // In a real implementation, you'd fetch trends for the previous period
+    return undefined;
+  }, [trends]);
 
   // Breadcrumbs - Show "All Campaigns > [Campaign Name] > Ad Groups" format
   const breadcrumbs = useMemo(() => {
@@ -1184,11 +1215,17 @@ export default function HierarchicalCampaignManager() {
         <MasterPerformanceChart
           data={trends.map(t => ({
             date: t.date,
-            spend: t.spend,
-            sales: t.sales,
-            acos: t.acos,
-            roas: t.roas,
+            spend: typeof t.spend === 'number' ? t.spend : parseFloat(String(t.spend)) || 0,
+            sales: typeof t.sales === 'number' ? t.sales : parseFloat(String(t.sales)) || 0,
+            acos: typeof t.acos === 'number' ? t.acos : parseFloat(String(t.acos)) || 0,
+            roas: typeof t.roas === 'number' ? t.roas : parseFloat(String(t.roas)) || 0,
+            impressions: typeof t.impressions === 'number' ? t.impressions : parseInt(String(t.impressions)) || undefined,
+            clicks: typeof t.clicks === 'number' ? t.clicks : parseInt(String(t.clicks)) || undefined,
+            cpc: typeof t.cpc === 'number' ? t.cpc : parseFloat(String(t.cpc)) || undefined,
+            ctr: typeof t.ctr === 'number' ? t.ctr : parseFloat(String(t.ctr)) || undefined,
           }))}
+          previousPeriodData={previousPeriodData}
+          eventAnnotations={eventAnnotations}
           height={400}
         />
       )}

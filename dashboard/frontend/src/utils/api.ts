@@ -806,6 +806,40 @@ export const fetchCampaignDetails = async (campaignId: number, days: number = 7)
   return response.data;
 };
 
+export interface EventAnnotation {
+  date: string;
+  type: 'price_change' | 'bid_rule_applied' | 'budget_change' | 'status_change' | 'other';
+  label: string;
+  description?: string;
+}
+
+export const fetchEventAnnotations = async (
+  days?: number,
+  startDate?: Date,
+  endDate?: Date
+): Promise<EventAnnotation[]> => {
+  // For now, return empty array - this can be connected to an API endpoint later
+  // The API endpoint could query bid_change_history and other event tables
+  try {
+    const params = new URLSearchParams();
+    if (startDate && endDate) {
+      params.append('start_date', startDate.toISOString().split('T')[0]);
+      params.append('end_date', endDate.toISOString().split('T')[0]);
+    } else if (days) {
+      params.append('days', days.toString());
+    }
+    
+    // TODO: Replace with actual API endpoint when available
+    // const response = await api.get(`/api/events/annotations?${params.toString()}`);
+    // return response.data;
+    
+    return [];
+  } catch (error) {
+    console.error('Error fetching event annotations:', error);
+    return [];
+  }
+};
+
 export const applyCampaignAction = async (campaignId: number, action: {
   action_type: string;
   old_value?: number;

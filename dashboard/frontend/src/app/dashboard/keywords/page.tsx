@@ -311,7 +311,7 @@ export default function KeywordsPage() {
                 handleUnlock(row);
               }}
               disabled={unlockMutation.isPending}
-              className="p-1.5 text-amber-400 hover:bg-amber-500/20 rounded transition-colors"
+              className="p-1.5 text-amber-500 dark:text-amber-400 hover:bg-amber-500/20 rounded transition-colors"
               title="Unlock keyword for AI changes"
             >
               <Unlock className="w-4 h-4" />
@@ -337,7 +337,7 @@ export default function KeywordsPage() {
                       e.stopPropagation();
                       setLockingKeyword(null);
                     }}
-                    className="p-1 text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                    className="p-1 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -348,7 +348,7 @@ export default function KeywordsPage() {
                     e.stopPropagation();
                     setLockingKeyword(row.keyword_id);
                   }}
-                  className="p-1.5 text-gray-400 hover:text-amber-400 hover:bg-amber-500/20 rounded transition-colors opacity-0 group-hover:opacity-100"
+                  className="p-1.5 text-gray-600 dark:text-gray-300 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/20 rounded transition-colors"
                   title="Lock keyword from AI changes"
                 >
                   <Lock className="w-4 h-4" />

@@ -34,13 +34,14 @@ interface DateRangePickerProps {
 const dateRangeOptions: Array<{ value: DateRangeType; label: string }> = [
   { value: 'today', label: 'Today' },
   { value: 'yesterday', label: 'Yesterday' },
-  { value: 'last_7_days', label: 'Last 7 days' },
-  { value: 'this_week', label: 'This week' },
-  { value: 'last_week', label: 'Last week' },
-  { value: 'last_30_days', label: 'Last 30 days' },
-  { value: 'this_month', label: 'This month' },
-  { value: 'last_month', label: 'Last month' },
-  { value: 'year_to_date', label: 'Year to date' },
+  { value: 'last_7_days', label: 'Last 7 Days' },
+  { value: 'last_14_days', label: 'Last 14 Days' },
+  { value: 'last_30_days', label: 'Last 30 Days' },
+  { value: 'this_week', label: 'This Week' },
+  { value: 'last_week', label: 'Last Week' },
+  { value: 'this_month', label: 'This Month' },
+  { value: 'last_month', label: 'Last Month' },
+  { value: 'year_to_date', label: 'Year to Date' },
   { value: 'lifetime', label: 'Lifetime' },
 ];
 
