@@ -112,14 +112,14 @@ export default function HierarchicalCampaignManager() {
   // Breadcrumbs - Show "All Campaigns > [Campaign Name] > Ad Groups" format
   const breadcrumbs = useMemo(() => {
     const crumbs = [];
-    if (selectedCampaign) {
+    if (selectedCampaign && activeTab !== 'campaigns' && activeTab !== 'portfolios') {
       crumbs.push({ type: 'campaigns' as TabType, id: selectedCampaign.id, name: selectedCampaign.name });
     }
-    if (selectedAdGroup) {
+    if (selectedAdGroup && (activeTab === 'keywords' || activeTab === 'targeting' || activeTab === 'search_terms' || activeTab === 'ads')) {
       crumbs.push({ type: 'ad_groups' as TabType, id: selectedAdGroup.id, name: selectedAdGroup.name });
     }
     return crumbs;
-  }, [selectedCampaign, selectedAdGroup]);
+  }, [selectedCampaign, selectedAdGroup, activeTab]);
 
   // Queries based on active tab
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
@@ -226,7 +226,12 @@ export default function HierarchicalCampaignManager() {
     }
   };
 
-  const handleCampaignClick = (campaign: Campaign) => {
+  const handleCampaignClick = (campaign: Campaign, e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    // Auto-switch to Ad Groups tab and filter to show only ad groups within that campaign
     setSelectedCampaign({ id: campaign.campaign_id, name: campaign.campaign_name });
     setSelectedAdGroup(null);
     setActiveTab('ad_groups');
@@ -506,8 +511,9 @@ export default function HierarchicalCampaignManager() {
             render: (value: unknown, row: Campaign) => (
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleCampaignClick(row)}
-                  className="text-left hover:text-amazon-orange transition-colors"
+                  onClick={(e) => handleCampaignClick(row, e)}
+                  className="text-left hover:text-amazon-orange transition-colors flex-1"
+                  type="button"
                 >
                   <p className="font-medium text-gray-900 dark:text-white">{row.campaign_name}</p>
                   <div className="flex items-center gap-2 mt-1">

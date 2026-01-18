@@ -35,17 +35,20 @@ export default function HierarchicalTabs({
   onTabChange,
   breadcrumbs = [],
   onBreadcrumbClick,
-}: HierarchicalTabsProps) {
+}: HierarchicalTabsProps) { 
   const tabs: TabType[] = ['portfolios', 'campaigns', 'ad_groups', 'ads', 'keywords', 'targeting', 'search_terms', 'placements'];
+
+  // Show breadcrumbs when we have breadcrumb items OR when we're in a drill-down view
+  const showBreadcrumbs = breadcrumbs.length > 0 || (activeTab !== 'campaigns' && activeTab !== 'portfolios');
 
   return (
     <div className="space-y-4">
       {/* Breadcrumbs - Format: All Campaigns > [Campaign Name] > Ad Groups */}
-      {breadcrumbs.length > 0 && (
+      {showBreadcrumbs && (
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
           <button
             onClick={() => onBreadcrumbClick?.({ type: 'campaigns' })}
-            className="hover:text-amazon-orange transition-colors"
+            className="hover:text-amazon-orange transition-colors font-medium"
           >
             All Campaigns
           </button>
@@ -54,17 +57,17 @@ export default function HierarchicalTabs({
               <ChevronRight className="w-4 h-4" />
               <button
                 onClick={() => onBreadcrumbClick?.(crumb)}
-                className="hover:text-amazon-orange transition-colors"
+                className="hover:text-amazon-orange transition-colors font-medium"
               >
                 {crumb.name || tabConfig[crumb.type].label}
               </button>
             </React.Fragment>
           ))}
-          {/* Show current tab name if we're in a drill-down view */}
-          {activeTab !== 'campaigns' && activeTab !== breadcrumbs[breadcrumbs.length - 1]?.type && (
+          {/* Show current tab name if we're in a drill-down view and it's not already in breadcrumbs */}
+          {activeTab !== 'campaigns' && activeTab !== 'portfolios' && activeTab !== breadcrumbs[breadcrumbs.length - 1]?.type && (
             <>
               <ChevronRight className="w-4 h-4" />
-              <span className="text-gray-500 dark:text-gray-500">
+              <span className="text-gray-500 dark:text-gray-500 font-medium">
                 {tabConfig[activeTab].label}
               </span>
             </>
