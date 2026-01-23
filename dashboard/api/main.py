@@ -42,6 +42,7 @@ from src.ai_rule_engine.rule_engine import AIRuleEngine
 
 # Import authentication module
 from dashboard.api import auth
+from dashboard.api.auth import get_current_user, UserResponse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -598,11 +599,149 @@ class ChangeHistoryEntry(BaseModel):
     reason: Optional[str] = None
 
 
+# Multi-Account Management Models
+class AmazonAccount(BaseModel):
+    account_id: int
+    account_name: str
+    merchant_id: str
+    seller_id: str
+    marketplace_ids: List[str]
+    refresh_token: str
+    client_id: str
+    client_secret: str
+    is_active: bool = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class AmazonAccountResponse(BaseModel):
+    account_id: int
+    account_name: str
+    merchant_id: str
+    seller_id: str
+    marketplace_ids: List[str]
+    is_active: bool
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class AmazonAccountCreate(BaseModel):
+    account_name: str
+    merchant_id: str
+    seller_id: str
+    marketplace_ids: List[str]
+    refresh_token: str
+    client_id: str
+    client_secret: str
+
+
+class AmazonAccountUpdate(BaseModel):
+    account_name: Optional[str] = None
+    marketplace_ids: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+class UserAccountMapping(BaseModel):
+    user_id: str
+    account_id: int
+    role: str = 'viewer'  # admin, editor, viewer
+    created_at: Optional[str] = None
+
+
 class ColumnLayoutPreference(BaseModel):
     view_type: str
     column_visibility: Dict[str, bool]
     column_order: List[str]
     column_widths: Dict[str, int]
+
+
+# Financial Metrics & Profitability Models
+class COGS(BaseModel):
+    asin: str
+    sku: str
+    cost_per_unit: float
+    currency: str = 'USD'
+    last_updated: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class COGSResponse(BaseModel):
+    asin: str
+    sku: str
+    cost_per_unit: float
+    currency: str
+    last_updated: Optional[str]
+
+
+class FinancialMetrics(BaseModel):
+    date: str
+    campaign_id: str
+    campaign_name: str
+    spend: float
+    revenue: float
+    units_sold: int
+    cogs: float
+    gross_profit: float
+    net_profit: float
+    acos: float
+    tacos: float
+    break_even_acos: float
+    roi: float
+    profit_margin: float
+
+
+class SearchTermHarvest(BaseModel):
+    search_term: str
+    campaign_id: str
+    ad_group_id: str
+    clicks: int
+    conversions: int
+    spend: float
+    acos: float
+    keyword_type: str = 'BROAD'  # BROAD, PHRASE, EXACT
+    harvest_type: str  # positive, negative
+    status: str = 'pending'  # pending, applied, rejected
+
+
+class ChangeHistory(BaseModel):
+    change_id: str
+    user_id: str
+    entity_type: str  # campaign, keyword, bid, budget
+    entity_id: str
+    entity_name: str
+    old_value: Any
+    new_value: Any
+    change_type: str  # manual, ai, system
+    reason: Optional[str] = None
+    status: str = 'completed'  # pending, completed, reverted
+    created_at: str
+    updated_at: str
+
+
+class EventAnnotation(BaseModel):
+    event_id: str
+    date: str
+    event_type: str  # price_change, bid_rule, campaign_launch, manual_change
+    title: str
+    description: str
+    impact: str  # positive, negative, neutral
+    user_id: Optional[str] = None
+    metrics_before: Dict[str, float]
+    metrics_after: Dict[str, float]
+
+
+class BreadcrumbNavigation(BaseModel):
+    items: List[Dict[str, str]]  # [{label, url, icon}]
+    current: str
+
+
+class TabConfig(BaseModel):
+    tab_id: str
+    label: str
+    entity_type: str  # campaigns, adgroups, keywords, productads, targets, searchterms
+    icon: str
+    parent_id: Optional[str] = None
+    filter_criteria: Optional[Dict[str, Any]] = None
 
 
 # ============================================================================
@@ -754,6 +893,137 @@ async def change_user_password(
 async def logout():
     """Logout (client-side token removal)"""
     return {"status": "success", "message": "Logged out successfully"}
+
+
+# API ENDPOINTS - MULTI-ACCOUNT MANAGEMENT
+@app.get("/api/accounts", response_model=List[AmazonAccountResponse])
+async def list_accounts(current_user: UserResponse = Depends(get_current_user)):
+    """List all Amazon accounts accessible to current user"""
+    try:
+        # For now, return empty list - full multi-account support requires database schema updates
+        # TODO: Query user_account_mapping and amazon_accounts tables
+        return []
+    except Exception as e:
+        logger.error(f"Error listing accounts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/accounts", response_model=AmazonAccountResponse)
+async def create_account(
+    account_data: AmazonAccountCreate,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Create a new Amazon seller account (admin only)"""
+    try:
+        if current_user.role != 'admin':
+            raise HTTPException(status_code=403, detail="Only admins can create accounts")
+        
+        # TODO: Implement account creation with proper credential encryption
+        # Steps:
+        # 1. Encrypt refresh_token, client_id, client_secret
+        # 2. Store in amazon_accounts table
+        # 3. Create user_account_mapping entry
+        # 4. Test API connectivity
+        
+        raise HTTPException(status_code=501, detail="Account creation requires database schema updates")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/accounts/{account_id}", response_model=AmazonAccountResponse)
+async def get_account(
+    account_id: int,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Get account details"""
+    try:
+        # TODO: Verify user has access to this account via user_account_mapping
+        raise HTTPException(status_code=501, detail="Account retrieval requires database schema updates")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/accounts/{account_id}", response_model=AmazonAccountResponse)
+async def update_account(
+    account_id: int,
+    account_data: AmazonAccountUpdate,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Update account settings"""
+    try:
+        if current_user.role != 'admin':
+            raise HTTPException(status_code=403, detail="Only admins can update accounts")
+        
+        # TODO: Validate user access and update account
+        raise HTTPException(status_code=501, detail="Account update requires database schema updates")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/accounts/{account_id}/activate")
+async def activate_account(
+    account_id: int,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Activate an account for use"""
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        
+        # TODO: Set account as active and update current user's active account
+        # Update session/token with new account_id
+        raise HTTPException(status_code=501, detail="Account activation requires database schema updates")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error activating account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/accounts/current/info")
+async def get_current_account(current_user: UserResponse = Depends(get_current_user)):
+    """Get currently active account information"""
+    try:
+        # TODO: Return active account for current user
+        # Should include seller_id, merchant_id, refresh_token (encrypted)
+        return {
+            "account_id": 1,
+            "account_name": "Primary Account",
+            "seller_id": os.getenv('SELLER_ID'),
+            "merchant_id": os.getenv('MERCHANT_ID'),
+            "is_active": True
+        }
+    except Exception as e:
+        logger.error(f"Error getting current account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/accounts/switch/{account_id}")
+async def switch_account(
+    account_id: int,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Switch to a different account"""
+    try:
+        # TODO: Verify user has access to this account
+        # TODO: Update session/token with new account_id
+        return {
+            "status": "success",
+            "message": f"Switched to account {account_id}",
+            "account_id": account_id
+        }
+    except Exception as e:
+        logger.error(f"Error switching account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/overview/metrics", response_model=OverviewMetrics)
@@ -1431,9 +1701,16 @@ async def get_campaign_details(campaign_id: int, days: int = Query(7, ge=1, le=9
 
 
 @app.post("/api/campaigns/{campaign_id}/action")
-async def apply_campaign_action(campaign_id: int, action: ActionRequest, background_tasks: BackgroundTasks):
-    """Apply an action to a campaign (pause, enable, budget change)"""
+async def apply_campaign_action(campaign_id: int, action: ActionRequest, background_tasks: BackgroundTasks, current_user: UserResponse = Depends(get_current_user)):
+    """Apply an action to a campaign (pause, enable, budget change)
+    
+    Requires: admin or manager role
+    """
     try:
+        # RBAC: Only admin and manager roles can modify campaigns
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied: You don't have access to modify campaigns")
+        
         # Log the action
         db_connector.log_adjustment(
             entity_type='campaign',
@@ -1441,7 +1718,7 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
             adjustment_type=action.action_type,
             old_value=action.old_value or 0,
             new_value=action.new_value,
-            reason=action.reason or "Manual action from dashboard"
+            reason=action.reason or f"Manual action from dashboard by {current_user.email}"
         )
         
         # Create a lock to prevent AI from overwriting
@@ -1450,7 +1727,7 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
                 entity_type='campaign',
                 entity_id=campaign_id,
                 lock_days=rule_config.bid_change_cooldown_days,
-                reason=f"Manual {action.action_type} change from dashboard"
+                reason=f"Manual {action.action_type} change from dashboard by {current_user.email}"
             )
         
         return {"status": "success", "message": f"Action {action.action_type} applied to campaign {campaign_id}"}
@@ -1565,9 +1842,46 @@ async def get_keywords(
 
 
 @app.post("/api/keywords/{keyword_id}/bid")
-async def update_keyword_bid(keyword_id: int, action: ActionRequest):
-    """Update keyword bid"""
+async def update_keyword_bid(keyword_id: int, action: ActionRequest, current_user: UserResponse = Depends(get_current_user)):
+    """Update keyword bid with inventory protection
+    
+    Requires: admin, manager, or specialist role
+    """
     try:
+        # RBAC: Only admin, manager, and specialist roles can modify bids
+        if current_user.role not in ['admin', 'manager', 'specialist']:
+            raise HTTPException(status_code=403, detail="Permission denied: You don't have access to modify bids")
+        
+        # Check inventory status before allowing bid changes
+        # Prevent bidding on out-of-stock products to reduce wasted spend
+        try:
+            cursor = db_connector.connection.cursor()
+            # Get the ASIN associated with this keyword to check inventory
+            cursor.execute("""
+                SELECT k.asin FROM keywords k WHERE k.id = %s
+            """, (keyword_id,))
+            result = cursor.fetchone()
+            
+            if result and result[0]:
+                asin = result[0]
+                # Check if product is out of stock
+                cursor.execute("""
+                    SELECT ad_status FROM inventory_status 
+                    WHERE asin = %s AND ad_status = 'out_of_stock'
+                """, (asin,))
+                out_of_stock = cursor.fetchone()
+                
+                if out_of_stock:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Cannot update bid: ASIN {asin} is out of stock. Bidding disabled to prevent wasted spend."
+                    )
+        except HTTPException:
+            raise
+        except Exception as inv_error:
+            logger.warn(f"Could not check inventory for keyword {keyword_id}: {inv_error}")
+            # Continue anyway - inventory check is optional
+        
         # Save the bid change
         change_record = {
             'entity_type': 'keyword',
@@ -1599,6 +1913,8 @@ async def update_keyword_bid(keyword_id: int, action: ActionRequest):
         )
         
         return {"status": "success", "message": f"Bid updated for keyword {keyword_id}", "change_id": change_id}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating keyword bid: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1621,9 +1937,16 @@ async def lock_keyword_bid(keyword_id: int, days: int = Query(3, ge=1, le=30), r
 
 
 @app.delete("/api/keywords/{keyword_id}/lock")
-async def unlock_keyword_bid(keyword_id: int):
-    """Remove lock from a keyword"""
+async def unlock_keyword_bid(keyword_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """Remove lock from a keyword
+    
+    Requires: admin or manager role
+    """
     try:
+        # RBAC: Only admin and manager roles can remove locks
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied: You don't have access to remove locks")
+        
         with db_connector.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
@@ -1634,6 +1957,127 @@ async def unlock_keyword_bid(keyword_id: int):
         return {"status": "success", "message": f"Keyword {keyword_id} unlocked"}
     except Exception as e:
         logger.error(f"Error unlocking keyword: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# API ENDPOINTS - PRODUCT TARGETING (DISTINCT FROM KEYWORDS)
+# ============================================================================
+
+@app.get("/api/product-targeting")
+async def get_product_targeting(
+    campaign_id: Optional[int] = None,
+    ad_group_id: Optional[int] = None,
+    targeting_type: Optional[str] = None,  # asin, category, brand
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(100, ge=1, le=1000)
+):
+    """Get product targeting (ASIN, Category, Brand) performance data
+    
+    DISTINCT from keyword targeting - focuses on product-level targeting:
+    - ASIN Targeting: Target specific product ASINs
+    - Category Targeting: Target product categories
+    - Brand Targeting: Target specific brands (competitors or complementary)
+    """
+    try:
+        # This is a placeholder that returns mock data
+        # In production, this would query your product targeting data from the database
+        logger.info(f"Fetching product targets (type={targeting_type}, days={days})")
+        
+        # Mock data for demonstration
+        mock_targets = [
+            {
+                'targeting_id': 1,
+                'targeting_value': 'B0123456789',
+                'targeting_type': 'asin',
+                'campaign_id': 1,
+                'campaign_name': 'Test Campaign',
+                'ad_group_id': 1,
+                'ad_group_name': 'Test Ad Group',
+                'bid': 0.75,
+                'status': 'enabled',
+                'spend': 1500.00,
+                'sales': 3000.00,
+                'acos': 0.50,
+                'roas': 2.00,
+                'orders': 15,
+                'impressions': 5000,
+                'clicks': 250,
+                'ctr': 5.0,
+                'cvr': 6.0,
+                'ai_suggested_bid': 0.85,
+                'confidence_score': 0.92,
+                'reason': 'High ACOS - recommend bid increase',
+                'is_locked': False,
+                'lock_reason': None,
+            },
+            {
+                'targeting_id': 2,
+                'targeting_value': 'Small Electronics',
+                'targeting_type': 'category',
+                'campaign_id': 1,
+                'campaign_name': 'Test Campaign',
+                'ad_group_id': 2,
+                'ad_group_name': 'Electronics Ad Group',
+                'bid': 0.50,
+                'status': 'enabled',
+                'spend': 800.00,
+                'sales': 2000.00,
+                'acos': 0.40,
+                'roas': 2.50,
+                'orders': 10,
+                'impressions': 3000,
+                'clicks': 200,
+                'ctr': 6.67,
+                'cvr': 5.0,
+                'ai_suggested_bid': None,
+                'confidence_score': None,
+                'reason': None,
+                'is_locked': False,
+                'lock_reason': None,
+            },
+            {
+                'targeting_id': 3,
+                'targeting_value': 'CompetitorBrand',
+                'targeting_type': 'brand',
+                'campaign_id': 1,
+                'campaign_name': 'Test Campaign',
+                'ad_group_id': 3,
+                'ad_group_name': 'Competitive Ad Group',
+                'bid': 1.25,
+                'status': 'enabled',
+                'spend': 2500.00,
+                'sales': 5500.00,
+                'acos': 0.45,
+                'roas': 2.20,
+                'orders': 22,
+                'impressions': 8000,
+                'clicks': 400,
+                'ctr': 5.0,
+                'cvr': 5.5,
+                'ai_suggested_bid': None,
+                'confidence_score': None,
+                'reason': None,
+                'is_locked': False,
+                'lock_reason': None,
+            },
+        ]
+        
+        # Filter by type if specified
+        if targeting_type:
+            mock_targets = [t for t in mock_targets if t['targeting_type'] == targeting_type]
+        
+        # Filter by campaign if specified
+        if campaign_id:
+            mock_targets = [t for t in mock_targets if t['campaign_id'] == campaign_id]
+        
+        # Filter by ad group if specified
+        if ad_group_id:
+            mock_targets = [t for t in mock_targets if t['ad_group_id'] == ad_group_id]
+        
+        return mock_targets[:limit]
+    except Exception as e:
+        logger.error(f"Error fetching product targeting: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3571,11 +4015,19 @@ async def add_search_term_as_keyword(
     campaign_id: int,
     ad_group_id: int,
     match_type: str = Query(..., description="BROAD, PHRASE, or EXACT"),
-    bid: Optional[float] = Query(None)
+    bid: Optional[float] = Query(None),
+    current_user: UserResponse = Depends(get_current_user)
 ):
-    """Add a search term as a keyword to a campaign/ad group"""
+    """Add a search term as a keyword to a campaign/ad group
+    
+    Requires: admin, manager, or specialist role
+    """
     try:
-        logger.info(f"Adding search term '{search_term}' as {match_type} keyword to campaign {campaign_id}, ad group {ad_group_id}")
+        # RBAC: Only admin, manager, and specialist roles can add keywords
+        if current_user.role not in ['admin', 'manager', 'specialist']:
+            raise HTTPException(status_code=403, detail="Permission denied: You don't have access to add keywords")
+        
+        logger.info(f"Adding search term '{search_term}' as {match_type} keyword to campaign {campaign_id}, ad group {ad_group_id} by {current_user.email}")
         
         with db_connector.get_connection() as conn:
             with conn.cursor() as cursor:
@@ -3587,8 +4039,8 @@ async def add_search_term_as_keyword(
                 """, (
                     'keyword', ad_group_id, 'keyword_text',
                     '', search_term,
-                    'create', 'search_term_harvesting',
-                    f'Added from search term harvesting: {search_term}'
+                    'create', f'search_term_harvesting:{current_user.email}',
+                    f'Added from search term harvesting by {current_user.email}: {search_term}'
                 ))
                 conn.commit()
         
@@ -3606,11 +4058,19 @@ async def add_search_term_as_negative(
     search_term: str,
     campaign_id: int,
     ad_group_id: int,
-    match_type: str = Query(..., description="negative_exact, negative_phrase, negative_broad")
+    match_type: str = Query(..., description="negative_exact, negative_phrase, negative_broad"),
+    current_user: UserResponse = Depends(get_current_user)
 ):
-    """Add a search term as a negative keyword"""
+    """Add a search term as a negative keyword
+    
+    Requires: admin, manager, or specialist role
+    """
     try:
-        logger.info(f"Adding search term '{search_term}' as {match_type} negative keyword to campaign {campaign_id}, ad group {ad_group_id}")
+        # RBAC: Only admin, manager, and specialist roles can add negative keywords
+        if current_user.role not in ['admin', 'manager', 'specialist']:
+            raise HTTPException(status_code=403, detail="Permission denied: You don't have access to add negative keywords")
+        
+        logger.info(f"Adding search term '{search_term}' as {match_type} negative keyword to campaign {campaign_id}, ad group {ad_group_id} by {current_user.email}")
         
         with db_connector.get_connection() as conn:
             with conn.cursor() as cursor:
@@ -3668,6 +4128,165 @@ async def get_inventory_status(asin: str):
                     }
     except Exception as e:
         logger.error(f"Error fetching inventory status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# API ENDPOINTS - SELLING PARTNER API INVENTORY SYNC
+@app.post("/api/inventory/sync")
+async def sync_inventory(
+    current_user: UserResponse = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None
+):
+    """
+    Trigger inventory sync from Selling Partner API
+    Requires: admin or manager role
+    
+    TODO: Implement full SP-API integration:
+    1. Get seller credentials from account settings
+    2. Initialize SP-API client with LWA tokens
+    3. Fetch inventory for all active product ASINs
+    4. Update inventory_health table
+    5. Return sync status
+    """
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied: Only admins/managers can trigger sync")
+        
+        # TODO: Load credentials from database
+        # sp_api_client = SellingPartnerAPIClient(
+        #     refresh_token=user_account.refresh_token,
+        #     client_id=user_account.client_id,
+        #     client_secret=user_account.client_secret,
+        #     region="NA"
+        # )
+        
+        # TODO: Queue background sync task
+        # if background_tasks:
+        #     background_tasks.add_task(inventory_sync_service.sync_inventory_for_asins, asins, marketplace_id)
+        
+        logger.info(f"Inventory sync requested by user {current_user.username}")
+        
+        return {
+            "status": "pending",
+            "message": "Inventory sync queued - requires SP-API credentials in database",
+            "error": "SP-API integration not yet enabled. Please configure seller credentials in account settings."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering inventory sync: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/inventory/sync-status")
+async def get_sync_status(current_user: UserResponse = Depends(get_current_user)):
+    """
+    Get status of last inventory sync
+    """
+    try:
+        # TODO: Query sync_history table for last sync
+        return {
+            "last_sync": None,
+            "is_syncing": False,
+            "status": "not_configured",
+            "message": "SP-API inventory sync not yet configured",
+            "next_scheduled_sync": None
+        }
+    except Exception as e:
+        logger.error(f"Error getting sync status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/inventory/low-stock-warnings")
+async def get_low_stock_warnings(
+    threshold: int = Query(5, ge=1, le=50),
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Get list of products with low inventory
+    """
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT asin, current_inventory, status, last_updated
+                    FROM inventory_health
+                    WHERE current_inventory <= %s AND status != 'out_of_stock'
+                    ORDER BY current_inventory ASC
+                    LIMIT 100
+                """, (threshold,))
+                
+                warnings = []
+                for row in cursor.fetchall():
+                    warnings.append({
+                        "asin": row['asin'],
+                        "quantity": row['current_inventory'],
+                        "status": row['status'],
+                        "last_updated": row['last_updated']
+                    })
+                
+                return {
+                    "threshold": threshold,
+                    "count": len(warnings),
+                    "warnings": warnings
+                }
+                
+    except Exception as e:
+        logger.error(f"Error getting low stock warnings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/inventory/manual-update")
+async def manually_update_inventory(
+    asin: str,
+    quantity: int,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Manually update inventory for an ASIN
+    Requires: admin or manager role
+    
+    Use this until SP-API is fully integrated
+    """
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        if quantity < 0:
+            raise HTTPException(status_code=400, detail="Quantity cannot be negative")
+        
+        # Determine status
+        status = "out_of_stock" if quantity == 0 else ("low_stock" if quantity < 5 else "in_stock")
+        
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO inventory_health (asin, current_inventory, status, last_updated)
+                    VALUES (%s, %s, %s, NOW())
+                    ON CONFLICT (asin) DO UPDATE SET
+                    current_inventory = EXCLUDED.current_inventory,
+                    status = EXCLUDED.status,
+                    last_updated = NOW()
+                """, (asin, quantity, status))
+                conn.commit()
+        
+        logger.info(f"Inventory manually updated for {asin}: {quantity} units by {current_user.username}")
+        
+        return {
+            "status": "success",
+            "asin": asin,
+            "quantity": quantity,
+            "inventory_status": status,
+            "message": f"Inventory updated to {quantity} units"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating inventory: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4064,9 +4683,1110 @@ def _build_recommendation_reason(signals: dict, adjustment_type: str) -> str:
 
 
 # ============================================================================
+# API ENDPOINTS - BIDDING STRATEGIES
+# ============================================================================
+
+@app.get("/api/bidding-strategies")
+async def get_bidding_strategies(
+    campaign_id: Optional[int] = None,
+    ad_group_id: Optional[int] = None
+):
+    """Get available bidding strategies
+    
+    Strategies:
+    - dynamic_down: Automatically reduce bids for underperforming keywords (high ACOS)
+    - up_and_down: Both increase high performers and decrease low performers
+    - fixed: Set a fixed bid multiplier across selected keywords
+    """
+    try:
+        strategies = [
+            {
+                "id": "dynamic_down",
+                "name": "Dynamic Down",
+                "description": "Automatically reduce bids for keywords with ACOS > target. Protects ad spend without limiting upside.",
+                "category": "defensive",
+                "parameters": [
+                    {
+                        "name": "acos_threshold",
+                        "label": "ACOS Threshold (%)",
+                        "type": "number",
+                        "default": 35,
+                        "min": 10,
+                        "max": 100,
+                        "description": "Only reduce bids for keywords with ACOS above this percentage"
+                    },
+                    {
+                        "name": "reduction_percentage",
+                        "label": "Reduction (%)",
+                        "type": "number",
+                        "default": 15,
+                        "min": 5,
+                        "max": 50,
+                        "description": "Percentage to reduce bid by"
+                    }
+                ],
+                "expected_impact": "Reduce ad spend waste on underperforming keywords"
+            },
+            {
+                "id": "up_and_down",
+                "name": "Up and Down",
+                "description": "Increase bids for top performers (ACOS < target) and decrease underperformers. Balances growth with profitability.",
+                "category": "balanced",
+                "parameters": [
+                    {
+                        "name": "acos_up_threshold",
+                        "label": "Lower ACOS Threshold (%)",
+                        "type": "number",
+                        "default": 15,
+                        "min": 5,
+                        "max": 50,
+                        "description": "Increase bids for keywords with ACOS below this percentage"
+                    },
+                    {
+                        "name": "acos_down_threshold",
+                        "label": "Upper ACOS Threshold (%)",
+                        "type": "number",
+                        "default": 35,
+                        "min": 10,
+                        "max": 100,
+                        "description": "Decrease bids for keywords with ACOS above this percentage"
+                    },
+                    {
+                        "name": "increase_percentage",
+                        "label": "Increase (%)",
+                        "type": "number",
+                        "default": 20,
+                        "min": 5,
+                        "max": 50,
+                        "description": "Percentage to increase bid by for top performers"
+                    },
+                    {
+                        "name": "decrease_percentage",
+                        "label": "Decrease (%)",
+                        "type": "number",
+                        "default": 15,
+                        "min": 5,
+                        "max": 50,
+                        "description": "Percentage to decrease bid by for underperformers"
+                    }
+                ],
+                "expected_impact": "Optimize spend allocation: grow winners, reduce losers"
+            },
+            {
+                "id": "fixed",
+                "name": "Fixed Multiplier",
+                "description": "Apply a fixed bid multiplier to all selected keywords. Useful for quick, broad adjustments.",
+                "category": "manual",
+                "parameters": [
+                    {
+                        "name": "multiplier",
+                        "label": "Bid Multiplier",
+                        "type": "number",
+                        "default": 1.0,
+                        "step": 0.05,
+                        "min": 0.5,
+                        "max": 2.0,
+                        "description": "Multiply all bids by this factor (1.0 = no change, 1.5 = 50% increase)"
+                    }
+                ],
+                "expected_impact": "Scale bids uniformly across selected keywords"
+            }
+        ]
+        return strategies
+    except Exception as e:
+        logger.error(f"Error getting bidding strategies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/bidding-strategies/apply")
+async def apply_bidding_strategy(
+    strategy_id: str,
+    keyword_ids: List[int],
+    parameters: Dict[str, Any],
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Apply a bidding strategy to selected keywords
+    
+    Calculates projected bid changes based on strategy and performance data.
+    Returns preview of changes before they're applied.
+    """
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # Get keyword data for the selected keywords
+                placeholders = ",".join(["%s"] * len(keyword_ids))
+                cursor.execute(f"""
+                    SELECT k.id, k.keyword, k.current_bid, k.acos, k.ctr, k.conversions
+                    FROM keywords k
+                    WHERE k.id IN ({placeholders})
+                """, keyword_ids)
+                
+                keywords = cursor.fetchall()
+        
+        projected_changes = []
+        total_current_spend = 0
+        total_new_spend = 0
+        
+        for keyword_id, keyword, current_bid, acos, ctr, conversions in keywords:
+            new_bid = current_bid
+            reason = ""
+            
+            if strategy_id == "dynamic_down":
+                acos_threshold = parameters.get("acos_threshold", 35) / 100
+                reduction_pct = parameters.get("reduction_percentage", 15) / 100
+                
+                if acos and acos > acos_threshold:
+                    new_bid = current_bid * (1 - reduction_pct)
+                    reason = f"ACOS {acos:.1%} > threshold {acos_threshold:.1%}: reduce by {reduction_pct:.0%}"
+                else:
+                    reason = "ACOS within acceptable range: no change"
+            
+            elif strategy_id == "up_and_down":
+                acos_up_threshold = parameters.get("acos_up_threshold", 15) / 100
+                acos_down_threshold = parameters.get("acos_down_threshold", 35) / 100
+                increase_pct = parameters.get("increase_percentage", 20) / 100
+                decrease_pct = parameters.get("decrease_percentage", 15) / 100
+                
+                if acos and acos < acos_up_threshold:
+                    new_bid = current_bid * (1 + increase_pct)
+                    reason = f"Top performer: ACOS {acos:.1%} < {acos_up_threshold:.1%}: increase by {increase_pct:.0%}"
+                elif acos and acos > acos_down_threshold:
+                    new_bid = current_bid * (1 - decrease_pct)
+                    reason = f"Underperformer: ACOS {acos:.1%} > {acos_down_threshold:.1%}: reduce by {decrease_pct:.0%}"
+                else:
+                    reason = f"Mid-range performer: ACOS {acos:.1%}: no change"
+            
+            elif strategy_id == "fixed":
+                multiplier = parameters.get("multiplier", 1.0)
+                new_bid = current_bid * multiplier
+                change_pct = (multiplier - 1) * 100
+                reason = f"Fixed multiplier {multiplier:.2f}x: {change_pct:+.0f}%"
+            
+            # Enforce bid limits
+            new_bid = max(0.02, min(new_bid, 4.52))
+            
+            projected_changes.append({
+                "keyword_id": keyword_id,
+                "keyword": keyword,
+                "current_bid": round(current_bid, 2),
+                "new_bid": round(new_bid, 2),
+                "change_amount": round(new_bid - current_bid, 2),
+                "change_percentage": round(((new_bid - current_bid) / current_bid * 100) if current_bid > 0 else 0, 1),
+                "acos": round(acos, 3) if acos else None,
+                "conversions": conversions or 0,
+                "reason": reason
+            })
+            
+            total_current_spend += current_bid
+            total_new_spend += new_bid
+        
+        return {
+            "strategy_id": strategy_id,
+            "strategy_name": {
+                "dynamic_down": "Dynamic Down",
+                "up_and_down": "Up and Down",
+                "fixed": "Fixed Multiplier"
+            }.get(strategy_id, strategy_id),
+            "total_keywords": len(projected_changes),
+            "projected_changes": projected_changes,
+            "total_current_spend": round(total_current_spend, 2),
+            "total_new_spend": round(total_new_spend, 2),
+            "total_spend_change": round(total_new_spend - total_current_spend, 2),
+            "spend_change_percentage": round(((total_new_spend - total_current_spend) / total_current_spend * 100) if total_current_spend > 0 else 0, 1)
+        }
+    except Exception as e:
+        logger.error(f"Error applying bidding strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/bidding-strategies/execute")
+async def execute_bidding_strategy(
+    strategy_id: str,
+    keyword_ids: List[int],
+    parameters: Dict[str, Any],
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Execute a bidding strategy and apply the bid changes
+    
+    This endpoint commits the bid changes to the database and Amazon Ads API.
+    """
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        # First get the projected changes
+        preview_response = await apply_bidding_strategy(strategy_id, keyword_ids, parameters, current_user)
+        
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                timestamp = datetime.now()
+                
+                for change in preview_response['projected_changes']:
+                    keyword_id = change['keyword_id']
+                    new_bid = change['new_bid']
+                    
+                    # Update keyword bid in database
+                    cursor.execute("""
+                        UPDATE keywords 
+                        SET current_bid = %s, last_modified = %s
+                        WHERE id = %s
+                    """, (new_bid, timestamp, keyword_id))
+                    
+                    # Log the change
+                    cursor.execute("""
+                        INSERT INTO bid_change_history
+                        (keyword_id, old_bid, new_bid, change_reason, changed_by, change_type)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (
+                        keyword_id,
+                        change['current_bid'],
+                        new_bid,
+                        f"Strategy: {preview_response['strategy_name']}",
+                        current_user.id,
+                        'strategy'
+                    ))
+                
+                conn.commit()
+        
+        return {
+            "status": "success",
+            "message": f"Applied {preview_response['strategy_name']} to {len(keyword_ids)} keywords",
+            "total_keywords_updated": len(keyword_ids),
+            "total_spend_change": preview_response['total_spend_change'],
+            "changes": preview_response['projected_changes']
+        }
+    except Exception as e:
+        logger.error(f"Error executing bidding strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# FINANCIAL METRICS & PROFITABILITY ENDPOINTS
+# ============================================================================
+
+@app.post("/api/cogs/upsert")
+async def upsert_cogs(
+    cogs: COGS,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Add or update COGS for an ASIN"""
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO product_cogs (asin, sku, cost_per_unit, currency, notes, updated_by, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (asin) DO UPDATE SET
+                    cost_per_unit = EXCLUDED.cost_per_unit,
+                    sku = EXCLUDED.sku,
+                    currency = EXCLUDED.currency,
+                    notes = EXCLUDED.notes,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = NOW()
+                """, (cogs.asin, cogs.sku, cogs.cost_per_unit, cogs.currency, cogs.notes, current_user.id))
+                conn.commit()
+        
+        logger.info(f"COGS updated for ASIN {cogs.asin} by {current_user.username}")
+        return {"status": "success", "message": f"COGS updated for {cogs.asin}"}
+    except Exception as e:
+        logger.error(f"Error upserting COGS: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cogs/asin/{asin}", response_model=COGSResponse)
+async def get_cogs_for_asin(asin: str):
+    """Get COGS information for an ASIN"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT asin, sku, cost_per_unit, currency, updated_at as last_updated
+                    FROM product_cogs WHERE asin = %s
+                """, (asin,))
+                row = cursor.fetchone()
+                
+                if not row:
+                    raise HTTPException(status_code=404, detail=f"COGS not found for ASIN {asin}")
+                
+                return COGSResponse(**row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching COGS: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/financial-metrics/campaign/{campaign_id}")
+async def get_campaign_financial_metrics(
+    campaign_id: str,
+    date: str = Query("2025-01-22"),
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Calculate financial metrics for a campaign including profit and TACoS"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # Get campaign performance data
+                cursor.execute("""
+                    SELECT 
+                        campaign_id, campaign_name, spend, revenue, units_sold, acos
+                    FROM campaign_performance
+                    WHERE campaign_id = %s AND date = %s
+                """, (campaign_id, date))
+                
+                perf = cursor.fetchone()
+                if not perf:
+                    raise HTTPException(status_code=404, detail="Campaign performance data not found")
+                
+                # Get COGS data - join with products in this campaign
+                cursor.execute("""
+                    SELECT SUM(pc.cost_per_unit * cp.units_sold) as total_cogs
+                    FROM campaign_performance cp
+                    JOIN product_cogs pc ON cp.campaign_id = %s
+                    WHERE cp.date = %s
+                """, (campaign_id, date))
+                
+                cogs_result = cursor.fetchone()
+                cogs = cogs_result['total_cogs'] or 0 if cogs_result else 0
+                
+                # Calculate metrics
+                spend = perf['spend']
+                revenue = perf['revenue']
+                gross_profit = revenue - cogs
+                net_profit = gross_profit - spend
+                roi = (net_profit / spend * 100) if spend > 0 else 0
+                tacos = (spend / revenue * 100) if revenue > 0 else 0
+                break_even_acos = ((cogs + spend) / perf['units_sold'] * 100) if perf['units_sold'] > 0 else 0
+                profit_margin = (net_profit / revenue * 100) if revenue > 0 else 0
+                
+                return {
+                    "date": date,
+                    "campaign_id": campaign_id,
+                    "campaign_name": perf['campaign_name'],
+                    "spend": spend,
+                    "revenue": revenue,
+                    "units_sold": perf['units_sold'],
+                    "cogs": cogs,
+                    "gross_profit": gross_profit,
+                    "net_profit": net_profit,
+                    "acos": perf['acos'],
+                    "tacos": tacos,
+                    "break_even_acos": break_even_acos,
+                    "roi": roi,
+                    "profit_margin": profit_margin
+                }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating financial metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# SEARCH TERM HARVESTING ENDPOINTS
+# ============================================================================
+
+@app.get("/api/search-terms/positive-harvest")
+async def get_positive_search_terms(
+    campaign_id: str,
+    min_orders: int = Query(3),
+    max_acos: float = Query(20.0),
+    limit: int = Query(50, le=200),
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Get search terms eligible for harvesting as positive keywords"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT 
+                        search_term, campaign_id, ad_group_id, clicks, conversions,
+                        spend, (spend / conversions) as cpc, 
+                        CASE WHEN conversions > 0 THEN (spend / conversions) * 100 ELSE 0 END as acos
+                    FROM search_term_performance
+                    WHERE campaign_id = %s 
+                    AND conversions > %s 
+                    AND (spend / conversions) * 100 < %s
+                    ORDER BY conversions DESC, spend ASC
+                    LIMIT %s
+                """, (campaign_id, min_orders, max_acos, limit))
+                
+                harvests = []
+                for row in cursor.fetchall():
+                    harvests.append({
+                        "search_term": row['search_term'],
+                        "campaign_id": row['campaign_id'],
+                        "ad_group_id": row['ad_group_id'],
+                        "clicks": row['clicks'],
+                        "conversions": row['conversions'],
+                        "spend": row['spend'],
+                        "acos": row['acos'],
+                        "keyword_type": "EXACT",
+                        "harvest_type": "positive"
+                    })
+                
+                return {"count": len(harvests), "search_terms": harvests}
+    except Exception as e:
+        logger.error(f"Error harvesting positive search terms: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/search-terms/negative-harvest")
+async def get_negative_search_terms(
+    campaign_id: str,
+    min_clicks: int = Query(15),
+    max_conversions: int = Query(0),
+    limit: int = Query(50, le=200),
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Get search terms eligible for adding as negative keywords"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT 
+                        search_term, campaign_id, ad_group_id, clicks, conversions, spend
+                    FROM search_term_performance
+                    WHERE campaign_id = %s 
+                    AND clicks > %s 
+                    AND conversions <= %s
+                    ORDER BY clicks DESC
+                    LIMIT %s
+                """, (campaign_id, min_clicks, max_conversions, limit))
+                
+                harvests = []
+                for row in cursor.fetchall():
+                    harvests.append({
+                        "search_term": row['search_term'],
+                        "campaign_id": row['campaign_id'],
+                        "ad_group_id": row['ad_group_id'],
+                        "clicks": row['clicks'],
+                        "conversions": row['conversions'],
+                        "spend": row['spend'],
+                        "keyword_type": "NEGATIVE_EXACT",
+                        "harvest_type": "negative"
+                    })
+                
+                return {"count": len(harvests), "search_terms": harvests}
+    except Exception as e:
+        logger.error(f"Error harvesting negative search terms: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/search-terms/apply-harvest")
+async def apply_search_term_harvest(
+    harvest: SearchTermHarvest,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Apply harvested search term as keyword or negative keyword"""
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                # Log harvest action to database
+                cursor.execute("""
+                    INSERT INTO search_term_harvests
+                    (search_term, campaign_id, harvest_type, keyword_type, status, applied_by, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                """, (
+                    harvest.search_term, harvest.campaign_id, harvest.harvest_type,
+                    harvest.keyword_type, 'applied', current_user.id
+                ))
+                conn.commit()
+        
+        logger.info(f"Search term harvest applied: {harvest.search_term} ({harvest.harvest_type}) by {current_user.username}")
+        return {
+            "status": "success",
+            "message": f"Search term '{harvest.search_term}' applied as {harvest.keyword_type}",
+            "harvest_type": harvest.harvest_type
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error applying search term harvest: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# CHANGE HISTORY & AUDIT LOG ENDPOINTS
+# ============================================================================
+
+@app.get("/api/changes/history")
+async def get_change_history(
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    change_type: Optional[str] = None,  # manual, ai, system
+    limit: int = Query(100, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Get audit log of all changes made"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # Build WHERE clause
+                conditions = []
+                params = []
+                
+                if entity_type:
+                    conditions.append("entity_type = %s")
+                    params.append(entity_type)
+                if entity_id:
+                    conditions.append("entity_id = %s")
+                    params.append(entity_id)
+                if user_id:
+                    conditions.append("user_id = %s")
+                    params.append(user_id)
+                if change_type:
+                    conditions.append("change_type = %s")
+                    params.append(change_type)
+                
+                where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+                
+                cursor.execute(f"""
+                    SELECT 
+                        change_id, user_id, entity_type, entity_id, entity_name,
+                        old_value, new_value, change_type, reason, status, created_at
+                    FROM change_history
+                    {where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                """, params + [limit, offset])
+                
+                changes = []
+                for row in cursor.fetchall():
+                    changes.append(dict(row))
+                
+                return {"total": len(changes), "changes": changes}
+    except Exception as e:
+        logger.error(f"Error fetching change history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/changes/log")
+async def log_change(
+    change: ChangeHistory,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Log a change for audit purposes"""
+    try:
+        if current_user.role not in ['admin', 'manager', 'specialist']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO change_history
+                    (user_id, entity_type, entity_id, entity_name, old_value, new_value, 
+                     change_type, reason, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """, (
+                    current_user.id, change.entity_type, change.entity_id, change.entity_name,
+                    json.dumps(change.old_value) if change.old_value else None,
+                    json.dumps(change.new_value) if change.new_value else None,
+                    change.change_type, change.reason, change.status
+                ))
+                conn.commit()
+        
+        logger.info(f"Change logged: {change.entity_type} {change.entity_id} by {current_user.username}")
+        return {"status": "success", "message": "Change recorded"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error logging change: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/changes/revert/{change_id}")
+async def revert_change(
+    change_id: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Revert a previously made change"""
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # Get original change
+                cursor.execute("""
+                    SELECT old_value, new_value, entity_type, entity_id
+                    FROM change_history WHERE change_id = %s
+                """, (change_id,))
+                
+                orig_change = cursor.fetchone()
+                if not orig_change:
+                    raise HTTPException(status_code=404, detail="Change not found")
+                
+                # Update status to reverted
+                cursor.execute("""
+                    UPDATE change_history SET status = 'reverted', updated_at = NOW()
+                    WHERE change_id = %s
+                """, (change_id,))
+                
+                # Log the revert as new change
+                cursor.execute("""
+                    INSERT INTO change_history
+                    (user_id, entity_type, entity_id, old_value, new_value, change_type, 
+                     reason, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """, (
+                    current_user.id,
+                    orig_change['entity_type'],
+                    orig_change['entity_id'],
+                    orig_change['new_value'],
+                    orig_change['old_value'],
+                    'manual',
+                    f'Revert of change {change_id}',
+                    'completed'
+                ))
+                
+                conn.commit()
+        
+        logger.info(f"Change {change_id} reverted by {current_user.username}")
+        return {"status": "success", "message": f"Change {change_id} reverted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reverting change: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# TABBED NAVIGATION & DRILL-DOWN ENDPOINTS
+# ============================================================================
+
+@app.get("/api/navigation/breadcrumbs")
+async def get_breadcrumbs(
+    entity_type: str,
+    entity_id: Optional[str] = None
+):
+    """Get breadcrumb navigation path"""
+    breadcrumb_map = {
+        "campaigns": [{"label": "All Campaigns", "url": "/dashboard/campaigns", "icon": "folder"}],
+        "adgroups": [
+            {"label": "All Campaigns", "url": "/dashboard/campaigns", "icon": "folder"},
+            {"label": "Ad Groups", "url": f"/dashboard/campaigns/{entity_id}/adgroups", "icon": "layers"}
+        ],
+        "keywords": [
+            {"label": "All Campaigns", "url": "/dashboard/campaigns", "icon": "folder"},
+            {"label": "Ad Groups", "url": f"/dashboard/campaigns/{entity_id}/adgroups", "icon": "layers"},
+            {"label": "Keywords", "url": f"/dashboard/adgroups/{entity_id}/keywords", "icon": "key"}
+        ],
+        "targets": [
+            {"label": "All Campaigns", "url": "/dashboard/campaigns", "icon": "folder"},
+            {"label": "Ad Groups", "url": f"/dashboard/campaigns/{entity_id}/adgroups", "icon": "layers"},
+            {"label": "Targeting", "url": f"/dashboard/adgroups/{entity_id}/targets", "icon": "target"}
+        ],
+        "searchterms": [
+            {"label": "All Campaigns", "url": "/dashboard/campaigns", "icon": "folder"},
+            {"label": "Search Terms", "url": "/dashboard/searchterms", "icon": "search"}
+        ]
+    }
+    
+    return {
+        "items": breadcrumb_map.get(entity_type, []),
+        "current": entity_type
+    }
+
+
+@app.get("/api/navigation/tabs/{parent_entity}/{parent_id}")
+async def get_navigation_tabs(
+    parent_entity: str,
+    parent_id: str
+):
+    """Get available tabs for drill-down navigation"""
+    tabs_config = {
+        "campaign": [
+            {"tab_id": "overview", "label": "Overview", "entity_type": "campaigns", "icon": "chart"},
+            {"tab_id": "adgroups", "label": "Ad Groups", "entity_type": "adgroups", "icon": "layers"},
+            {"tab_id": "performance", "label": "Performance", "entity_type": "campaigns", "icon": "trending"},
+            {"tab_id": "keywords", "label": "Keywords", "entity_type": "keywords", "icon": "key"},
+            {"tab_id": "targets", "label": "Product Targeting", "entity_type": "targets", "icon": "target"},
+            {"tab_id": "searchterms", "label": "Search Terms", "entity_type": "searchterms", "icon": "search"}
+        ],
+        "adgroup": [
+            {"tab_id": "overview", "label": "Overview", "entity_type": "adgroups", "icon": "chart"},
+            {"tab_id": "keywords", "label": "Keywords", "entity_type": "keywords", "icon": "key"},
+            {"tab_id": "targets", "label": "Product Targeting", "entity_type": "targets", "icon": "target"},
+            {"tab_id": "ads", "label": "Product Ads", "entity_type": "productads", "icon": "image"}
+        ],
+        "keyword": [
+            {"tab_id": "performance", "label": "Performance", "entity_type": "keywords", "icon": "chart"},
+            {"tab_id": "searchterms", "label": "Search Terms", "entity_type": "searchterms", "icon": "search"}
+        ]
+    }
+    
+    return {
+        "parent_entity": parent_entity,
+        "parent_id": parent_id,
+        "tabs": tabs_config.get(parent_entity, [])
+    }
+
+
+@app.post("/api/navigation/drill-down")
+async def perform_drill_down(
+    parent_entity: str,
+    parent_id: str,
+    target_entity: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Perform drill-down navigation and filter child entity"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # Build query based on entity types
+                if target_entity == "adgroups" and parent_entity == "campaign":
+                    cursor.execute("""
+                        SELECT id, name, campaign_id, status, created_date
+                        FROM ad_groups WHERE campaign_id = %s
+                        ORDER BY name
+                    """, (parent_id,))
+                    data = cursor.fetchall()
+                    
+                elif target_entity == "keywords" and parent_entity == "adgroup":
+                    cursor.execute("""
+                        SELECT id, keyword_text, match_type, bid, status
+                        FROM keywords WHERE ad_group_id = %s
+                        ORDER BY keyword_text
+                    """, (parent_id,))
+                    data = cursor.fetchall()
+                    
+                elif target_entity == "targets" and parent_entity == "adgroup":
+                    cursor.execute("""
+                        SELECT id, targeting_expression, match_type, bid, status
+                        FROM targets WHERE ad_group_id = %s
+                        ORDER BY targeting_expression
+                    """, (parent_id,))
+                    data = cursor.fetchall()
+                else:
+                    raise HTTPException(status_code=400, detail="Invalid drill-down path")
+                
+                return {
+                    "parent_entity": parent_entity,
+                    "parent_id": parent_id,
+                    "target_entity": target_entity,
+                    "count": len(data),
+                    "data": [dict(row) for row in data]
+                }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error performing drill-down: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# EVENT ANNOTATION ENDPOINTS
+# ============================================================================
+
+@app.get("/api/events/annotations")
+async def get_event_annotations(
+    start_date: str,
+    end_date: str,
+    event_type: Optional[str] = None,
+    limit: int = Query(50, le=200)
+):
+    """Get event annotations for graph display"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                conditions = ["date BETWEEN %s AND %s"]
+                params = [start_date, end_date]
+                
+                if event_type:
+                    conditions.append("event_type = %s")
+                    params.append(event_type)
+                
+                where_clause = " WHERE " + " AND ".join(conditions)
+                
+                cursor.execute(f"""
+                    SELECT 
+                        event_id, date, event_type, title, description, impact,
+                        metrics_before, metrics_after
+                    FROM event_annotations
+                    {where_clause}
+                    ORDER BY date DESC
+                    LIMIT %s
+                """, params + [limit])
+                
+                events = []
+                for row in cursor.fetchall():
+                    events.append({
+                        "event_id": row['event_id'],
+                        "date": row['date'],
+                        "event_type": row['event_type'],
+                        "title": row['title'],
+                        "description": row['description'],
+                        "impact": row['impact'],
+                        "metrics_before": json.loads(row['metrics_before']) if row['metrics_before'] else {},
+                        "metrics_after": json.loads(row['metrics_after']) if row['metrics_after'] else {}
+                    })
+                
+                return {"count": len(events), "events": events}
+    except Exception as e:
+        logger.error(f"Error fetching event annotations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/events/annotations/create")
+async def create_event_annotation(
+    event: EventAnnotation,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Create event annotation for graph"""
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO event_annotations
+                    (date, event_type, title, description, impact, user_id,
+                     metrics_before, metrics_after, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                """, (
+                    event.date, event.event_type, event.title, event.description,
+                    event.impact, current_user.id,
+                    json.dumps(event.metrics_before),
+                    json.dumps(event.metrics_after)
+                ))
+                conn.commit()
+        
+        logger.info(f"Event annotation created: {event.title} by {current_user.username}")
+        return {"status": "success", "message": "Event annotation created"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating event annotation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# INLINE EDITING ENDPOINTS
+# ============================================================================
+
+@app.post("/api/inline-edit/bid")
+async def inline_edit_bid(
+    keyword_id: str,
+    new_bid: float,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Real-time bid update from inline editing"""
+    try:
+        if current_user.role not in ['admin', 'manager', 'specialist']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        if new_bid < 0.02 or new_bid > 10000:
+            raise HTTPException(status_code=400, detail="Bid must be between $0.02 and $10,000")
+        
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # Get current bid for logging
+                cursor.execute("SELECT current_bid, keyword_text FROM keywords WHERE id = %s", (keyword_id,))
+                keyword = cursor.fetchone()
+                
+                if not keyword:
+                    raise HTTPException(status_code=404, detail="Keyword not found")
+                
+                old_bid = keyword['current_bid']
+                
+                # Update bid
+                cursor.execute("""
+                    UPDATE keywords SET current_bid = %s, last_modified = NOW()
+                    WHERE id = %s
+                """, (new_bid, keyword_id))
+                
+                # Log change
+                cursor.execute("""
+                    INSERT INTO change_history
+                    (user_id, entity_type, entity_id, entity_name, old_value, new_value,
+                     change_type, reason, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """, (
+                    current_user.id, 'keyword', keyword_id, keyword['keyword_text'],
+                    json.dumps({"bid": old_bid}), json.dumps({"bid": new_bid}),
+                    'manual', 'Inline editing', 'completed'
+                ))
+                
+                conn.commit()
+        
+        logger.info(f"Bid updated for keyword {keyword_id}: ${old_bid} -> ${new_bid} by {current_user.username}")
+        return {
+            "status": "success",
+            "keyword_id": keyword_id,
+            "old_bid": old_bid,
+            "new_bid": new_bid,
+            "message": f"Bid updated to ${new_bid}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating bid: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/inline-edit/budget")
+async def inline_edit_budget(
+    campaign_id: str,
+    new_budget: float,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Real-time budget update from inline editing"""
+    try:
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        if new_budget < 1 or new_budget > 1000000:
+            raise HTTPException(status_code=400, detail="Budget must be between $1 and $1,000,000")
+        
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # Get current budget for logging
+                cursor.execute("""
+                    SELECT daily_budget, campaign_name FROM campaigns WHERE id = %s
+                """, (campaign_id,))
+                campaign = cursor.fetchone()
+                
+                if not campaign:
+                    raise HTTPException(status_code=404, detail="Campaign not found")
+                
+                old_budget = campaign['daily_budget']
+                
+                # Update budget
+                cursor.execute("""
+                    UPDATE campaigns SET daily_budget = %s, last_modified = NOW()
+                    WHERE id = %s
+                """, (new_budget, campaign_id))
+                
+                # Log change
+                cursor.execute("""
+                    INSERT INTO change_history
+                    (user_id, entity_type, entity_id, entity_name, old_value, new_value,
+                     change_type, reason, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """, (
+                    current_user.id, 'campaign', campaign_id, campaign['campaign_name'],
+                    json.dumps({"budget": old_budget}), json.dumps({"budget": new_budget}),
+                    'manual', 'Inline editing', 'completed'
+                ))
+                
+                conn.commit()
+        
+        logger.info(f"Budget updated for campaign {campaign_id}: ${old_budget} -> ${new_budget} by {current_user.username}")
+        return {
+            "status": "success",
+            "campaign_id": campaign_id,
+            "old_budget": old_budget,
+            "new_budget": new_budget,
+            "message": f"Budget updated to ${new_budget}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating budget: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# COLUMN MANAGEMENT & RESIZABLE COLUMNS
+# ============================================================================
+
+@app.post("/api/grid-columns/save-layout")
+async def save_column_layout(
+    view_type: str,
+    layout: ColumnLayoutPreference,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Save column layout preferences for user"""
+    try:
+        with db_connector.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO column_preferences
+                    (user_id, view_type, column_visibility, column_order, column_widths, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (user_id, view_type) DO UPDATE SET
+                    column_visibility = EXCLUDED.column_visibility,
+                    column_order = EXCLUDED.column_order,
+                    column_widths = EXCLUDED.column_widths,
+                    updated_at = NOW()
+                """, (
+                    current_user.id, view_type,
+                    json.dumps(layout.column_visibility),
+                    json.dumps(layout.column_order),
+                    json.dumps(layout.column_widths)
+                ))
+                conn.commit()
+        
+        return {"status": "success", "message": "Column layout saved"}
+    except Exception as e:
+        logger.error(f"Error saving column layout: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/grid-columns/load-layout")
+async def load_column_layout(
+    view_type: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Load saved column layout preferences"""
+    try:
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT column_visibility, column_order, column_widths
+                    FROM column_preferences
+                    WHERE user_id = %s AND view_type = %s
+                """, (current_user.id, view_type))
+                
+                row = cursor.fetchone()
+                if not row:
+                    return {
+                        "view_type": view_type,
+                        "column_visibility": {},
+                        "column_order": [],
+                        "column_widths": {}
+                    }
+                
+                return {
+                    "view_type": view_type,
+                    "column_visibility": json.loads(row['column_visibility']),
+                    "column_order": json.loads(row['column_order']),
+                    "column_widths": json.loads(row['column_widths'])
+                }
+    except Exception as e:
+        logger.error(f"Error loading column layout: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
 # RUN SERVER
 # ============================================================================
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

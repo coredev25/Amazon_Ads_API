@@ -101,10 +101,20 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   const [showFilterMenu, setShowFilterMenu] = useState<string | null>(null);
   const [showBulkActionMenu, setShowBulkActionMenu] = useState(false);
   const [bulkActionParams, setBulkActionParams] = useState<any>({});
+  const [bulkActionConfirmation, setBulkActionConfirmation] = useState<{ 
+    action: string; 
+    count: number; 
+    details?: string;
+    onConfirm?: () => void;
+  } | null>(null);
+  const [bulkActionInProgress, setBulkActionInProgress] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
+
+  // Generate a unique key for localStorage based on columns
+  const gridLayoutKey = `smartgrid_layout_${columns.map(c => String(c.key)).join('_')}`;
 
   // Initialize from props or defaults
   useEffect(() => {
@@ -113,11 +123,26 @@ export default function SmartGrid<T extends Record<string, unknown>>({
       setColumnOrder(columnLayout.order.length > 0 ? columnLayout.order : columns.map(c => String(c.key)));
       setColumnWidths(columnLayout.widths);
     } else {
+      // Try to load from localStorage first
+      try {
+        const savedLayout = localStorage.getItem(gridLayoutKey);
+        if (savedLayout) {
+          const parsed = JSON.parse(savedLayout);
+          setColumnVisibility(parsed.visibility || columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: true }), {}));
+          setColumnOrder(parsed.order?.length > 0 ? parsed.order : columns.map(c => String(c.key)));
+          setColumnWidths(parsed.widths || columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: col.width || 150 }), {}));
+          return;
+        }
+      } catch (e) {
+        console.warn('Failed to load column layout from localStorage:', e);
+      }
+      
+      // Default initialization
       setColumnVisibility(columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: true }), {}));
       setColumnOrder(columns.map(c => String(c.key)));
       setColumnWidths(columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: col.width || 150 }), {}));
     }
-  }, [columns, columnLayout]);
+  }, [columns, columnLayout, gridLayoutKey]);
 
   // Save layout changes
   useEffect(() => {
@@ -129,6 +154,13 @@ export default function SmartGrid<T extends Record<string, unknown>>({
       };
       onColumnLayoutChange(layout);
       
+      // Persist to localStorage
+      try {
+        localStorage.setItem(gridLayoutKey, JSON.stringify(layout));
+      } catch (e) {
+        console.warn('Failed to save column layout to localStorage:', e);
+      }
+      
       // Persist to user profile if callback provided
       if (onSaveColumnLayout) {
         onSaveColumnLayout(layout).catch(err => {
@@ -136,7 +168,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
         });
       }
     }
-  }, [columnVisibility, columnOrder, columnWidths, onColumnLayoutChange, onSaveColumnLayout]);
+  }, [columnVisibility, columnOrder, columnWidths, onColumnLayoutChange, onSaveColumnLayout, gridLayoutKey]);
 
   // Close filter menu when clicking outside
   useEffect(() => {
@@ -223,6 +255,13 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   }, [filteredData, sortConfig]);
 
   const handleCellClick = (row: T, column: Column<T>) => {
+    // Prevent editing if item is out of stock (bidding protection)
+    const inventoryStatus = (row as any).inventory_status;
+    if (inventoryStatus === 'out_of_stock' && (String(column.key) === 'bid' || String(column.key) === 'bid_price')) {
+      console.warn('Cannot edit bid for out-of-stock product');
+      return;
+    }
+    
     if (!column.editable || !onCellEdit) return;
     
     const rowId = String(row[keyField]);
@@ -350,13 +389,49 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   const handleBulkAction = async (action: string, params?: any) => {
     if (!onBulkAction || selectedRows.size === 0) return;
     
-    try {
-      await onBulkAction(action, Array.from(selectedRows), params);
-      setShowBulkActionMenu(false);
-      setBulkActionParams({});
-    } catch (error) {
-      console.error('Bulk action failed:', error);
+    const selectedIds = Array.from(selectedRows);
+    const actionDescriptions: Record<string, string> = {
+      pause: 'Pause selected items',
+      enable: 'Enable selected items',
+      archive: 'Archive selected items',
+      adjust_bids: `Adjust bids ${params?.type === 'increase' ? `by +${params?.percent}%` : params?.type === 'decrease' ? `by -${params?.percent}%` : `to $${params?.amount}`}`,
+      adjust_budgets: `Adjust budgets by $${params?.amount}`,
+      move_to_portfolio: `Move to portfolio ${params?.portfolioId}`,
+    };
+
+    // Check if any selected items are out of stock when trying to adjust bids
+    let outOfStockWarning = '';
+    if (action === 'adjust_bids') {
+      const outOfStockItems = selectedIds.filter(id => {
+        const row = data.find(r => String(r[keyField]) === id);
+        return (row as any)?.inventory_status === 'out_of_stock';
+      });
+      
+      if (outOfStockItems.length > 0) {
+        outOfStockWarning = `⚠️ ${outOfStockItems.length} item(s) are out of stock. Bidding wastes budget.`;
+      }
     }
+
+    // Show confirmation modal
+    setBulkActionConfirmation({
+      action: action,
+      count: selectedIds.length,
+      details: outOfStockWarning,
+      onConfirm: async () => {
+        setBulkActionInProgress(true);
+        try {
+          await onBulkAction(action, selectedIds, params);
+          setShowBulkActionMenu(false);
+          setBulkActionParams({});
+          setBulkActionConfirmation(null);
+        } catch (error) {
+          console.error('Bulk action failed:', error);
+          alert(`Failed to ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        } finally {
+          setBulkActionInProgress(false);
+        }
+      }
+    });
   };
 
   if (loading) {
@@ -975,6 +1050,47 @@ export default function SmartGrid<T extends Record<string, unknown>>({
           </table>
         </div>
       </div>
+
+      {/* Bulk Action Confirmation Modal */}
+      {bulkActionConfirmation && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="card max-w-md w-full p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+              Confirm Bulk Action
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              You are about to <span className="font-medium">{bulkActionConfirmation.action}</span> {bulkActionConfirmation.count} item(s).
+            </p>
+            {bulkActionConfirmation.details && (
+              <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded p-3 mb-4 text-sm text-orange-800 dark:text-orange-200">
+                {bulkActionConfirmation.details}
+              </div>
+            )}
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+              This action cannot be undone. Are you sure?
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setBulkActionConfirmation(null)}
+                disabled={bulkActionInProgress}
+                className="btn btn-sm btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => bulkActionConfirmation.onConfirm?.()}
+                disabled={bulkActionInProgress}
+                className="btn btn-sm btn-primary flex items-center gap-2"
+              >
+                {bulkActionInProgress && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+export type { Column };

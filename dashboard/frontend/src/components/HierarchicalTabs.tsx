@@ -25,7 +25,7 @@ const tabConfig: Record<TabType, { label: string; icon: React.ComponentType<{ cl
   ad_groups: { label: 'Ad Groups', icon: Layers },
   ads: { label: 'Ads', icon: FileText },
   keywords: { label: 'Keywords', icon: Key },
-  targeting: { label: 'Targeting', icon: Crosshair },
+  targeting: { label: 'Product Targeting', icon: Crosshair },  // DISTINCT from keywords
   search_terms: { label: 'Search Terms', icon: Search },
   placements: { label: 'Placements', icon: MapPin },
 };

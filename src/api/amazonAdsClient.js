@@ -158,8 +158,7 @@ class AmazonAdsClient {
             if (endpointLower.includes('/sb/')) {
               suggestedHeader = 'application/vnd.sbcampaign.v3+json';
             } else if (endpointLower.includes('/sd/')) {
-              // Sponsored Display requires 'application/vnd.sdcampaigns.v3+json' (plural 'campaigns')
-              suggestedHeader = 'application/vnd.sdcampaigns.v3+json';
+              suggestedHeader = 'application/vnd.sdcampaign.v3+json';
             } else if (endpointLower.includes('/sp/targets')) {
               suggestedHeader = 'application/vnd.sptargetingClause.v3+json';
             } else if (endpointLower.includes('/sp/') && endpointLower.includes('campaign')) {
@@ -177,29 +176,7 @@ class AmazonAdsClient {
             } else if (status === 401) {
               throw new Error('Authentication failed. Please check your API credentials.');
             } else if (status === 403) {
-              // Provide specific guidance for Sponsored Brands and Sponsored Display 403 errors
-              const endpointLower = String(endpoint).toLowerCase();
-              let errorMessage = 'Access forbidden. Please check your API permissions and profile ID.';
-              
-              if (endpointLower.includes('/sb/')) {
-                errorMessage = 'Access forbidden (403) for Sponsored Brands. ' +
-                  'This usually means: (1) Your app is not approved for Sponsored Brands access, ' +
-                  '(2) The profile ID is not brand-enabled, or (3) The refresh token lacks Sponsored Brands scope. ' +
-                  'Please verify: (a) Amazon Developer Console shows SB permissions enabled, ' +
-                  '(b) Profile ID is from a brand-enabled account (vendor type), ' +
-                  '(c) Refresh token includes cpc_advertising:campaign_management scope. ' +
-                  'Visit: https://advertising.amazon.com/API/docs/en-us/setting-up/step-1-create-an-application';
-              } else if (endpointLower.includes('/sd/')) {
-                errorMessage = 'Access forbidden (403) for Sponsored Display. ' +
-                  'This usually means: (1) Your app is not approved for Sponsored Display access, ' +
-                  '(2) The profile ID does not have SD permissions, or (3) The refresh token lacks Sponsored Display scope. ' +
-                  'Please verify: (a) Amazon Developer Console shows SD permissions enabled, ' +
-                  '(b) Profile ID has Sponsored Display access, ' +
-                  '(c) Refresh token includes cpc_advertising:campaign_management scope. ' +
-                  'Visit: https://advertising.amazon.com/API/docs/en-us/setting-up/step-1-create-an-application';
-              }
-              
-              throw new Error(errorMessage);
+              throw new Error('Access forbidden. Please check your API permissions and profile ID.');
             } else if (status === 415) {
               throw new Error(`Unsupported Media Type (415) - Endpoint: ${method} ${endpoint}. Error: ${JSON.stringify(errorDetail)}`);
             } else if (status === 400) {
@@ -621,11 +598,16 @@ class AmazonAdsClient {
    * Get Sponsored Products targets (product targeting) using v3 API
    * Endpoint: POST /sp/targets/list
    * 
+   * Product targeting is DISTINCT from keyword targeting:
+   * - Targets specific ASINs, categories, or brands
+   * - Uses different matching types (ASIN-based, Category-based, Brand-based)
+   * - Separate control from keyword-based targeting
+   * 
    * FIX: Added custom headers 'Content-Type' and 'Accept' to resolve 415 error.
    * API requires 'application/vnd.sptargetingClause.v3+json' for this endpoint.
    */
   async getTargets(filters = {}) {
-    logger.info('Fetching Sponsored Products targets (v3 API)...');
+    logger.info('Fetching Sponsored Products targets - Product Targeting (v3 API)...');
 
     const requestBody = {};
     // No default stateFilter — include only if caller provides one
@@ -640,6 +622,12 @@ class AmazonAdsClient {
       requestBody.adGroupIdFilter = filters.adGroupIdFilter;
     }
 
+    // Product Targeting specific filters
+    if (filters.targetingTypeFilter) {
+      // Targeting types: asin_targeting, category_targeting, brand_targeting
+      requestBody.targetingTypeFilter = filters.targetingTypeFilter;
+    }
+
     // v3 API requires version-specific Content-Type and Accept headers for Targets
     const customHeaders = {
       'Content-Type': 'application/vnd.sptargetingClause.v3+json',
@@ -647,6 +635,42 @@ class AmazonAdsClient {
     };
 
     return await this.getAllPaginatedDataV3WithStateHandling('/sp/targets/list', requestBody, customHeaders);
+  }
+
+  /**
+   * Get product targeting performance report
+   * Distinct from keyword reports - focuses on ASIN/Category/Brand targeting
+   * Endpoint: POST /reporting/reports
+   */
+  async getProductTargetingPerformanceData(reportDate) {
+    logger.info(`Fetching product targeting performance data for ${reportDate}...`);
+
+    const formattedDate = this.formatDateForAPI(reportDate);
+    const columns = this.getDefaultMetrics('targets');
+    
+    const reportConfig = {
+      name: `product_targeting_${reportDate}`,
+      startDate: formattedDate,
+      endDate: formattedDate,
+      configuration: {
+        adProduct: 'SPONSORED_PRODUCTS',
+        groupBy: ['targeting'],
+        columns: columns,
+        reportTypeId: 'spTargeting',
+        timeUnit: 'DAILY',
+        format: 'GZIP_JSON'
+      }
+    };
+
+    logger.debug('Product targeting report request config:', JSON.stringify(reportConfig, null, 2));
+
+    const headers = {
+      'Content-Type': 'application/vnd.createasyncreportrequest.v3+json',
+      'Accept': 'application/vnd.createasyncreportresponse.v3+json'
+    };
+
+    const response = await this.makeRequest('POST', '/reporting/reports', reportConfig, null, 3, 1000, headers);
+    return response.reportId;
   }
 
   /**
@@ -829,10 +853,9 @@ class AmazonAdsClient {
       params.count = filters.count;
     }
 
-    // FIX: Use specific Accept header for SD v3 (note: plural 'campaigns' required)
-    // Sponsored Display v3 requires 'application/vnd.sdcampaigns.v3+json' (not 'sdcampaign')
+    // FIX: Use specific Accept header for SD v3
     const customHeaders = {
-       'Accept': 'application/vnd.sdcampaigns.v3+json'
+       'Accept': 'application/vnd.sdcampaign.v3+json, application/json'
     };
 
     // Perform GET request
@@ -1249,6 +1272,85 @@ class AmazonAdsClient {
     };
 
     return metricsMap[reportType] || [];
+  }
+
+  /**
+   * Get default metrics for Sponsored Display reports (SD)
+   * Note: SD has different column names than SP and SB, includes vCPM
+   */
+  getDefaultMetricsForSponsoredDisplay() {
+    return [
+      'date',
+      'campaignId',
+      'campaignName',
+      'campaignStatus',
+      'impressions',
+      'clicks',
+      'clickThroughRate',
+      'spend',
+      'cost',
+      'costPerClick',
+      'vCPM',
+      'purchases1d',
+      'purchases7d',
+      'purchases14d',
+      'purchases30d',
+      'sales1d',
+      'sales7d',
+      'sales14d',
+      'sales30d',
+      'unitsSoldClicks1d',
+      'unitsSoldClicks7d',
+      'unitsSoldClicks14d',
+      'unitsSoldClicks30d',
+      'roasClicks7d',
+      'roasClicks14d',
+      'acosClicks7d',
+      'acosClicks14d'
+    ];
+  }
+
+  /**
+   * Get default metrics for Sponsored Brands reports (SB)
+   */
+  getDefaultMetricsForSponsoredBrands() {
+    return [
+      'date',
+      'campaignId',
+      'campaignName',
+      'campaignStatus',
+      'campaignBudgetAmount',
+      'impressions',
+      'clicks',
+      'clickThroughRate',
+      'cost',
+      'spend',
+      'costPerClick',
+      'purchases1d',
+      'purchases7d',
+      'purchases14d',
+      'purchases30d',
+      'purchasesSameSku1d',
+      'purchasesSameSku7d',
+      'purchasesSameSku14d',
+      'purchasesSameSku30d',
+      'sales1d',
+      'sales7d',
+      'sales14d',
+      'sales30d',
+      'attributedSalesSameSku1d',
+      'attributedSalesSameSku7d',
+      'attributedSalesSameSku14d',
+      'attributedSalesSameSku30d',
+      'unitsSoldClicks1d',
+      'unitsSoldClicks7d',
+      'unitsSoldClicks14d',
+      'unitsSoldClicks30d',
+      'roasClicks7d',
+      'roasClicks14d',
+      'acosClicks7d',
+      'acosClicks14d'
+    ];
   }
 
   /**

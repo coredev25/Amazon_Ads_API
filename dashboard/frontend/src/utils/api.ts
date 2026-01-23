@@ -181,6 +181,32 @@ export interface NegativeCandidate extends Record<string, unknown> {
   status: string;
 }
 
+export interface ProductTarget extends Record<string, unknown> {
+  targeting_id: number;
+  targeting_value: string;
+  targeting_type: 'asin' | 'category' | 'brand' | 'keyword';
+  campaign_id: number;
+  campaign_name: string;
+  ad_group_id: number;
+  ad_group_name: string;
+  bid: number;
+  status: string;
+  spend: number;
+  sales: number;
+  acos: number | null;
+  roas: number | null;
+  orders: number;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  cvr: number;
+  ai_suggested_bid: number | null;
+  confidence_score: number | null;
+  reason: string | null;
+  is_locked: boolean;
+  lock_reason: string | null;
+}
+
 export interface ChangeLogEntry extends Record<string, unknown> {
   id: number;
   timestamp: string;
@@ -452,23 +478,6 @@ export interface AdGroup {
   clicks: number;
   ctr: number;
   cvr: number;
-}
-
-export interface ProductTarget {
-  target_id: number;
-  target_type: string;
-  target_value: string;
-  campaign_id: number;
-  ad_group_id: number;
-  bid: number;
-  status: string;
-  spend: number;
-  sales: number;
-  acos?: number | null;
-  roas?: number | null;
-  orders: number;
-  impressions: number;
-  clicks: number;
 }
 
 export interface SearchTerm {
@@ -801,6 +810,26 @@ export const fetchAccounts = async (): Promise<Array<{
   return response.data;
 };
 
+export const switchAccount = async (accountId: string): Promise<{
+  status: string;
+  message: string;
+  account_id: string;
+}> => {
+  const response = await api.post(`/api/accounts/switch/${accountId}`);
+  return response.data;
+};
+
+export const getCurrentAccountInfo = async (): Promise<{
+  account_id: number;
+  account_name: string;
+  seller_id: string;
+  merchant_id: string;
+  is_active: boolean;
+}> => {
+  const response = await api.get('/api/accounts/current/info');
+  return response.data;
+};
+
 export const fetchCampaignDetails = async (campaignId: number, days: number = 7) => {
   const response = await api.get(`/api/campaigns/${campaignId}?days=${days}`);
   return response.data;
@@ -871,6 +900,24 @@ export const fetchKeywords = async (params: {
   if (params.limit) queryParams.append('limit', params.limit.toString());
   
   const response = await api.get(`/api/keywords?${queryParams.toString()}`);
+  return response.data;
+};
+
+export const fetchProductTargets = async (params: {
+  campaign_id?: number;
+  ad_group_id?: number;
+  targeting_type?: 'asin' | 'category' | 'brand';
+  days?: number;
+  limit?: number;
+}): Promise<ProductTarget[]> => {
+  const queryParams = new URLSearchParams();
+  if (params.campaign_id) queryParams.append('campaign_id', params.campaign_id.toString());
+  if (params.ad_group_id) queryParams.append('ad_group_id', params.ad_group_id.toString());
+  if (params.targeting_type) queryParams.append('targeting_type', params.targeting_type);
+  if (params.days) queryParams.append('days', params.days.toString());
+  if (params.limit) queryParams.append('limit', params.limit.toString());
+  
+  const response = await api.get(`/api/product-targeting?${queryParams.toString()}`);
   return response.data;
 };
 
@@ -1100,6 +1147,230 @@ export const fetchEngineHistory = async (limit: number = 10): Promise<EngineHist
 export const search = async (query: string, limit: number = 20): Promise<SearchResponse> => {
   const response = await api.get('/api/search', {
     params: { q: query, limit },
+  });
+  return response.data;
+};
+
+// ============================================================================
+// API FUNCTIONS - BIDDING STRATEGIES
+// ============================================================================
+
+export interface BiddingStrategy {
+  id: string;
+  name: string;
+  description: string;
+  category: 'defensive' | 'balanced' | 'manual';
+  parameters: Array<{
+    name: string;
+    label: string;
+    type: string;
+    default: any;
+    min?: number;
+    max?: number;
+    step?: number;
+    description?: string;
+  }>;
+  expected_impact: string;
+}
+
+export interface ProjectedBidChange {
+  keyword_id: number;
+  keyword: string;
+  current_bid: number;
+  new_bid: number;
+  change_amount: number;
+  change_percentage: number;
+  acos?: number;
+  conversions: number;
+  reason: string;
+}
+
+export interface BiddingStrategyPreview {
+  strategy_id: string;
+  strategy_name: string;
+  total_keywords: number;
+  projected_changes: ProjectedBidChange[];
+  total_current_spend: number;
+  total_new_spend: number;
+  total_spend_change: number;
+  spend_change_percentage: number;
+}
+
+export const fetchBiddingStrategies = async (): Promise<BiddingStrategy[]> => {
+  const response = await api.get('/api/bidding-strategies');
+  return response.data;
+};
+
+export const previewBiddingStrategy = async (
+  strategyId: string,
+  keywordIds: number[],
+  parameters: Record<string, any>
+): Promise<BiddingStrategyPreview> => {
+  const response = await api.post('/api/bidding-strategies/apply', {
+    strategy_id: strategyId,
+    keyword_ids: keywordIds,
+    parameters,
+  });
+  return response.data;
+};
+
+export const executeBiddingStrategy = async (
+  strategyId: string,
+  keywordIds: number[],
+  parameters: Record<string, any>
+): Promise<{
+  status: string;
+  message: string;
+  total_keywords_updated: number;
+  total_spend_change: number;
+  changes: ProjectedBidChange[];
+}> => {
+  const response = await api.post('/api/bidding-strategies/execute', {
+    strategy_id: strategyId,
+    keyword_ids: keywordIds,
+    parameters,
+  });
+  return response.data;
+};
+
+// ============================================================================
+// FINANCIAL METRICS & PROFITABILITY
+// ============================================================================
+
+export const upsertCOGS = async (
+  asin: string,
+  sku: string,
+  costPerUnit: number,
+  currency: string = 'USD',
+  notes?: string
+) => {
+  const response = await api.post('/api/cogs/upsert', {
+    asin,
+    sku,
+    cost_per_unit: costPerUnit,
+    currency,
+    notes,
+  });
+  return response.data;
+};
+
+export const getCOGS = async (asin: string) => {
+  const response = await api.get(`/api/cogs/asin/${asin}`);
+  return response.data;
+};
+
+export const getFinancialMetrics = async (campaignId: string, date?: string) => {
+  const response = await api.get(`/api/financial-metrics/campaign/${campaignId}`, {
+    params: { date: date || new Date().toISOString().split('T')[0] },
+  });
+  return response.data;
+};
+
+// ============================================================================
+// SEARCH TERM HARVESTING
+// ============================================================================
+
+export const getPositiveSearchTerms = async (campaignId: string, minOrders = 3, maxAcos = 20) => {
+  const response = await api.get('/api/search-terms/positive-harvest', {
+    params: { campaign_id: campaignId, min_orders: minOrders, max_acos: maxAcos },
+  });
+  return response.data;
+};
+
+export const getNegativeSearchTerms = async (campaignId: string, minClicks = 15, maxConversions = 0) => {
+  const response = await api.get('/api/search-terms/negative-harvest', {
+    params: { campaign_id: campaignId, min_clicks: minClicks, max_conversions: maxConversions },
+  });
+  return response.data;
+};
+
+export const applySearchTermHarvest = async (
+  searchTerm: string,
+  campaignId: string,
+  adGroupId: string,
+  harvestType: 'positive' | 'negative',
+  keywordType?: string
+) => {
+  const response = await api.post('/api/search-terms/apply-harvest', {
+    search_term: searchTerm,
+    campaign_id: campaignId,
+    ad_group_id: adGroupId,
+    harvest_type: harvestType,
+    keyword_type: keywordType || (harvestType === 'positive' ? 'EXACT' : 'NEGATIVE_EXACT'),
+    status: 'pending',
+  });
+  return response.data;
+};
+
+// ============================================================================
+// CHANGE HISTORY & AUDIT LOG
+// ============================================================================
+
+export const getChangeHistory = async (
+  entityType?: string,
+  entityId?: string,
+  changeType?: string,
+  limit = 100
+) => {
+  const response = await api.get('/api/changes/history', {
+    params: {
+      entity_type: entityType,
+      entity_id: entityId,
+      change_type: changeType,
+      limit,
+    },
+  });
+  return response.data;
+};
+
+// ============================================================================
+// EVENT ANNOTATIONS
+// ============================================================================
+
+export const getEventAnnotations = async (startDate: string, endDate: string, eventType?: string, limit = 50) => {
+  const response = await api.get('/api/events/annotations', {
+    params: { start_date: startDate, end_date: endDate, event_type: eventType, limit },
+  });
+  return response.data;
+};
+
+export const createEventAnnotation = async (
+  date: string,
+  eventType: string,
+  title: string,
+  description: string,
+  impact: 'positive' | 'negative' | 'neutral',
+  metricsBefore: Record<string, number> = {},
+  metricsAfter: Record<string, number> = {}
+) => {
+  const response = await api.post('/api/events/annotations/create', {
+    date,
+    event_type: eventType,
+    title,
+    description,
+    impact,
+    metrics_before: metricsBefore,
+    metrics_after: metricsAfter,
+  });
+  return response.data;
+};
+
+// ============================================================================
+// INLINE EDITING
+// ============================================================================
+
+export const updateBidInline = async (keywordId: string, newBid: number) => {
+  const response = await api.post('/api/inline-edit/bid', {
+    keyword_id: keywordId,
+    new_bid: newBid,
+  });
+  return response.data;
+};
+
+export const updateBudgetInline = async (campaignId: string, newBudget: number) => {
+  const response = await api.post('/api/inline-edit/budget', {
+    campaign_id: campaignId,
+    new_budget: newBudget,
   });
   return response.data;
 };

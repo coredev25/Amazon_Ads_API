@@ -21,11 +21,12 @@ import {
   Search as SearchIcon,
   Moon,
   Sun,
+  DollarSign,
 } from 'lucide-react';
 import { cn } from '@/utils/helpers';
 import { useAuth } from '@/contexts/AuthContext';
 import MultiAccountSwitcher from './MultiAccountSwitcher';
-import { fetchAccounts } from '@/utils/api';
+import { fetchAccounts, switchAccount } from '@/utils/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/contexts/ThemeContext';
 import { search, SearchResult } from '@/utils/api';
@@ -39,6 +40,7 @@ const navItems = [
   { href: '/dashboard/campaigns', icon: Target, label: 'Campaign Manager' },
   { href: '/dashboard/keywords', icon: Key, label: 'Keywords & Targeting' },
   { href: '/dashboard/recommendations', icon: Lightbulb, label: 'AI Recommendations' },
+  { href: '/dashboard/financial', icon: DollarSign, label: 'Financial Metrics' },
   { href: '/dashboard/ai-control', icon: Zap, label: 'AI Control' },
   { href: '/dashboard/rules', icon: BookOpen, label: 'Rule Engine' },
   { href: '/dashboard/negatives', icon: Ban, label: 'Negative Keywords' },
@@ -64,12 +66,23 @@ export default function Layout({ children }: LayoutProps) {
     enabled: true,
   });
 
-  const handleAccountChange = (accountId: string) => {
-    setCurrentAccountId(accountId);
-    // Store in localStorage for persistence
-    localStorage.setItem('current_account_id', accountId);
-    // Invalidate all queries to refetch with new account
-    // queryClient.invalidateQueries();
+  const handleAccountChange = async (accountId: string) => {
+    try {
+      setCurrentAccountId(accountId);
+      // Switch account on server
+      await switchAccount(accountId);
+      // Store in localStorage for persistence
+      localStorage.setItem('current_account_id', accountId);
+      // Invalidate all queries to refetch with new account context
+      queryClient.invalidateQueries();
+    } catch (error) {
+      console.error('Failed to switch account:', error);
+      // Revert selection
+      const savedAccountId = localStorage.getItem('current_account_id');
+      if (savedAccountId) {
+        setCurrentAccountId(savedAccountId);
+      }
+    }
   };
 
   // Load saved account on mount

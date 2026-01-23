@@ -15,6 +15,7 @@ export type DateRangeType =
   | 'this_month'
   | 'last_month'
   | 'year_to_date'
+  | 'this_year'
   | 'lifetime'
   | 'custom';
 
@@ -42,6 +43,7 @@ const dateRangeOptions: Array<{ value: DateRangeType; label: string }> = [
   { value: 'this_month', label: 'This Month' },
   { value: 'last_month', label: 'Last Month' },
   { value: 'year_to_date', label: 'Year to Date' },
+  { value: 'this_year', label: 'This Year' },
   { value: 'lifetime', label: 'Lifetime' },
 ];
 
@@ -91,6 +93,9 @@ function calculateDateRange(type: DateRangeType): { startDate: Date; endDate: Da
       endDate.setHours(23, 59, 59, 999);
       break;
     case 'year_to_date':
+      startDate = new Date(today.getFullYear(), 0, 1);
+      break;
+    case 'this_year':
       startDate = new Date(today.getFullYear(), 0, 1);
       break;
     case 'lifetime':
