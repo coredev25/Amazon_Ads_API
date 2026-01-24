@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from src.ai_rule_engine.config import RuleConfig
 from src.ai_rule_engine.database import DatabaseConnector
+from src.ai_rule_engine.amazon_sync import AmazonSyncManager
 from src.ai_rule_engine.rule_engine import AIRuleEngine
 
 # Import authentication module
@@ -47,6 +48,26 @@ from dashboard.api.auth import get_current_user, UserResponse
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _normalize_campaign_state(status: Optional[str]) -> str:
+    normalized = (status or '').strip().lower()
+    if normalized in ['paused', 'pause']:
+        return 'paused'
+    if normalized in ['archived', 'archive']:
+        return 'archived'
+    return 'enabled'
+
+
+def _get_amazon_sync_manager() -> Optional[AmazonSyncManager]:
+    if not db_connector or not rule_config:
+        logger.warning("Amazon sync unavailable: missing db connector or config")
+        return None
+    sync_manager = AmazonSyncManager(rule_config.__dict__, db_connector)
+    if not sync_manager.api_client:
+        logger.warning("Amazon API client not initialized; skipping Amazon update")
+        return None
+    return sync_manager
 
 # Global instances
 db_connector: Optional[DatabaseConnector] = None
@@ -621,6 +642,14 @@ class AmazonAccountResponse(BaseModel):
     seller_id: str
     marketplace_ids: List[str]
     is_active: bool
+
+
+class AccountListResponse(BaseModel):
+    account_id: str
+    account_name: str
+    marketplace_id: Optional[str] = None
+    region: Optional[str] = None
+    is_active: bool
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -850,36 +879,21 @@ async def login(credentials: auth.UserLogin):
 
 
 @app.get("/api/auth/me", response_model=auth.UserResponse)
-async def get_current_user_info(credentials: HTTPAuthorizationCredentials = Depends(auth.security)):
+async def get_current_user_info(current_user: auth.UserResponse = Depends(auth.get_current_user)):
     """Get current user information"""
-    try:
-        user = auth.get_current_user(credentials, db_connector)
-        return auth.UserResponse(
-            id=user['id'],
-            email=user['email'],
-            username=user['username'],
-            role=user['role'],
-            is_active=user['is_active'],
-            is_verified=user['is_verified'],
-            last_login=user['last_login'].isoformat() if user['last_login'] else None,
-            created_at=user['created_at'].isoformat()
-        )
-    except Exception as e:
-        logger.error(f"Error getting current user: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return current_user
 
 
 @app.post("/api/auth/change-password")
 async def change_user_password(
     password_data: auth.PasswordChange,
-    credentials: HTTPAuthorizationCredentials = Depends(auth.security)
+    current_user: auth.UserResponse = Depends(auth.get_current_user)
 ):
     """Change current user's password"""
     try:
-        user = auth.get_current_user(credentials, db_connector)
         auth.change_password(
             db_connector,
-            user['id'],
+            current_user.id,
             password_data.current_password,
             password_data.new_password
         )
@@ -896,13 +910,35 @@ async def logout():
 
 
 # API ENDPOINTS - MULTI-ACCOUNT MANAGEMENT
-@app.get("/api/accounts", response_model=List[AmazonAccountResponse])
+
+@app.get("/api/accounts", response_model=List[AccountListResponse])
 async def list_accounts(current_user: UserResponse = Depends(get_current_user)):
     """List all Amazon accounts accessible to current user"""
     try:
-        # For now, return empty list - full multi-account support requires database schema updates
-        # TODO: Query user_account_mapping and amazon_accounts tables
-        return []
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT account_id, account_name, marketplace_id, region, is_active,
+                           created_at, updated_at
+                    FROM amazon_accounts
+                    WHERE is_active = TRUE
+                    ORDER BY account_name
+                """)
+                accounts = cursor.fetchall()
+                
+                return [
+                    {
+                        "account_id": a['account_id'],
+                        "account_name": a['account_name'],
+                        "marketplace_id": a.get('marketplace_id'),
+                        "region": a.get('region'),
+                        "is_active": a['is_active'],
+                        "created_at": a['created_at'].isoformat() if a.get('created_at') else None,
+                        "updated_at": a['updated_at'].isoformat() if a.get('updated_at') else None
+                    }
+                    for a in accounts
+                ]
     except Exception as e:
         logger.error(f"Error listing accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1711,6 +1747,41 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
         if current_user.role not in ['admin', 'manager']:
             raise HTTPException(status_code=403, detail="Permission denied: You don't have access to modify campaigns")
         
+        campaign_status = None
+        budget_amount = None
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT campaign_status, budget_amount
+                    FROM campaigns
+                    WHERE campaign_id = %s
+                """, (campaign_id,))
+                campaign = cursor.fetchone()
+                if campaign:
+                    campaign_status = campaign.get('campaign_status')
+                    budget_amount = float(campaign.get('budget_amount', 0) or 0)
+
+                if action.action_type == 'pause':
+                    cursor.execute("""
+                        UPDATE campaigns
+                        SET campaign_status = 'PAUSED', updated_at = NOW()
+                        WHERE campaign_id = %s
+                    """, (campaign_id,))
+                elif action.action_type == 'enable':
+                    cursor.execute("""
+                        UPDATE campaigns
+                        SET campaign_status = 'ENABLED', updated_at = NOW()
+                        WHERE campaign_id = %s
+                    """, (campaign_id,))
+                elif action.action_type == 'budget':
+                    cursor.execute("""
+                        UPDATE campaigns
+                        SET budget_amount = %s, updated_at = NOW()
+                        WHERE campaign_id = %s
+                    """, (action.new_value, campaign_id))
+                conn.commit()
+
         # Log the action
         db_connector.log_adjustment(
             entity_type='campaign',
@@ -1730,6 +1801,27 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
                 reason=f"Manual {action.action_type} change from dashboard by {current_user.email}"
             )
         
+        sync_manager = _get_amazon_sync_manager()
+        if sync_manager:
+            if action.action_type in ['pause', 'enable', 'budget']:
+                if action.action_type == 'budget':
+                    daily_budget = float(action.new_value)
+                else:
+                    daily_budget = budget_amount or 0.0
+                if daily_budget <= 0:
+                    daily_budget = 1.0
+                    logger.warning(
+                        f"Campaign {campaign_id} missing budget; defaulting dailyBudget to $1.00 for Amazon update"
+                    )
+                state = _normalize_campaign_state(
+                    'PAUSED' if action.action_type == 'pause' else 'ENABLED' if action.action_type == 'enable' else campaign_status
+                )
+                sync_manager.update_campaign_budgets([{
+                    'campaign_id': campaign_id,
+                    'daily_budget': daily_budget,
+                    'state': state
+                }])
+
         return {"status": "success", "message": f"Action {action.action_type} applied to campaign {campaign_id}"}
     except Exception as e:
         logger.error(f"Error applying campaign action: {e}")
@@ -4529,34 +4621,6 @@ async def bulk_add_campaigns_to_portfolio(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/accounts")
-async def get_accounts():
-    """Get all Amazon seller accounts for the current user"""
-    try:
-        with db_connector.get_connection() as conn:
-            import psycopg2.extras
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute("""
-                    SELECT account_id, account_name, marketplace_id, region, is_active
-                    FROM amazon_accounts
-                    WHERE is_active = TRUE
-                    ORDER BY account_name
-                """)
-                accounts = cursor.fetchall()
-                
-                return [
-                    {
-                        "account_id": a['account_id'],
-                        "account_name": a['account_name'],
-                        "marketplace_id": a.get('marketplace_id'),
-                        "region": a.get('region'),
-                        "is_active": a['is_active']
-                    }
-                    for a in accounts
-                ]
-    except Exception as e:
-        logger.error(f"Error fetching accounts: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
@@ -5599,17 +5663,23 @@ async def inline_edit_bid(
         if new_bid < 0.02 or new_bid > 10000:
             raise HTTPException(status_code=400, detail="Bid must be between $0.02 and $10,000")
         
+        keyword_state = None
         with db_connector.get_connection() as conn:
             import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                 # Get current bid for logging
-                cursor.execute("SELECT current_bid, keyword_text FROM keywords WHERE id = %s", (keyword_id,))
+                cursor.execute("""
+                    SELECT current_bid, keyword_text, state, keyword_id
+                    FROM keywords
+                    WHERE id = %s
+                """, (keyword_id,))
                 keyword = cursor.fetchone()
                 
                 if not keyword:
                     raise HTTPException(status_code=404, detail="Keyword not found")
                 
                 old_bid = keyword['current_bid']
+                keyword_state = keyword.get('state')
                 
                 # Update bid
                 cursor.execute("""
@@ -5631,6 +5701,15 @@ async def inline_edit_bid(
                 
                 conn.commit()
         
+        sync_manager = _get_amazon_sync_manager()
+        if sync_manager:
+            keyword_external_id = int(keyword.get('keyword_id', keyword_id)) if keyword else int(keyword_id)
+            sync_manager.update_keyword_bids([{
+                'keyword_id': keyword_external_id,
+                'bid': float(new_bid),
+                'state': _normalize_campaign_state(keyword_state)
+            }])
+
         logger.info(f"Bid updated for keyword {keyword_id}: ${old_bid} -> ${new_bid} by {current_user.username}")
         return {
             "status": "success",
@@ -5660,23 +5739,27 @@ async def inline_edit_budget(
         if new_budget < 1 or new_budget > 1000000:
             raise HTTPException(status_code=400, detail="Budget must be between $1 and $1,000,000")
         
+        campaign_status = None
         with db_connector.get_connection() as conn:
             import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
                 # Get current budget for logging
                 cursor.execute("""
-                    SELECT daily_budget, campaign_name FROM campaigns WHERE id = %s
+                    SELECT budget_amount, campaign_name, campaign_status, campaign_id
+                    FROM campaigns
+                    WHERE id = %s
                 """, (campaign_id,))
                 campaign = cursor.fetchone()
                 
                 if not campaign:
                     raise HTTPException(status_code=404, detail="Campaign not found")
                 
-                old_budget = campaign['daily_budget']
+                old_budget = campaign['budget_amount']
+                campaign_status = campaign.get('campaign_status')
                 
                 # Update budget
                 cursor.execute("""
-                    UPDATE campaigns SET daily_budget = %s, last_modified = NOW()
+                    UPDATE campaigns SET budget_amount = %s, updated_at = NOW()
                     WHERE id = %s
                 """, (new_budget, campaign_id))
                 
@@ -5694,6 +5777,15 @@ async def inline_edit_budget(
                 
                 conn.commit()
         
+        sync_manager = _get_amazon_sync_manager()
+        if sync_manager:
+            campaign_external_id = int(campaign.get('campaign_id', campaign_id)) if campaign else int(campaign_id)
+            sync_manager.update_campaign_budgets([{
+                'campaign_id': campaign_external_id,
+                'daily_budget': float(new_budget),
+                'state': _normalize_campaign_state(campaign_status)
+            }])
+
         logger.info(f"Budget updated for campaign {campaign_id}: ${old_budget} -> ${new_budget} by {current_user.username}")
         return {
             "status": "success",

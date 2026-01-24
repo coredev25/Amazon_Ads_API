@@ -162,8 +162,17 @@ class AIRuleEngine:
             
             for ad_group in ad_groups:
                 ad_group_id = ad_group['ad_group_id']
+                portfolio_id = campaign.get('portfolio_id')
+                portfolio_name = campaign.get('portfolio_name')
+                ad_group_with_portfolio = {
+                    **ad_group,
+                    'campaign_id': campaign_id,
+                    'campaign_name': campaign.get('campaign_name'),
+                    'portfolio_id': portfolio_id,
+                    'portfolio_name': portfolio_name
+                }
                 ad_group_recs = self._analyze_entity(
-                    'ad_group', ad_group_id, ad_group,
+                    'ad_group', ad_group_id, ad_group_with_portfolio,
                     self.db.get_ad_group_performance(ad_group_id, self.config.performance_lookback_days)
                 )
                 all_recommendations.extend(ad_group_recs)
@@ -175,8 +184,17 @@ class AIRuleEngine:
                 
                 for keyword in keywords:
                     keyword_id = keyword['keyword_id']
+                    keyword_with_portfolio = {
+                        **keyword,
+                        'campaign_id': campaign_id,
+                        'campaign_name': campaign.get('campaign_name'),
+                        'ad_group_id': ad_group_id,
+                        'ad_group_name': ad_group.get('ad_group_name'),
+                        'portfolio_id': portfolio_id,
+                        'portfolio_name': portfolio_name
+                    }
                     keyword_recs = self._analyze_entity(
-                        'keyword', keyword_id, keyword,
+                        'keyword', keyword_id, keyword_with_portfolio,
                         self.db.get_keyword_performance(keyword_id, self.config.performance_lookback_days)
                     )
                     all_recommendations.extend(keyword_recs)

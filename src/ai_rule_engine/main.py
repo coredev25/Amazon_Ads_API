@@ -39,15 +39,18 @@ def setup_logging(level: str = 'INFO') -> None:
     )
 
 
-def load_config(config_path: str) -> RuleConfig:
-    """Load configuration from file or create default"""
+def load_config(config_path: str, db_connector: DatabaseConnector) -> RuleConfig:
+    """Load configuration from database with file fallback"""
+    config = RuleConfig.from_database(
+        db_connector,
+        fallback_to_file=True,
+        config_path=config_path
+    )
     if os.path.exists(config_path):
-        return RuleConfig.from_file(config_path)
-    else:
-        print(f"Config file {config_path} not found, creating default configuration")
-        config = RuleConfig()
-        config.to_file(config_path)
         return config
+    print(f"Config file {config_path} not found, creating default configuration")
+    config.to_file(config_path)
+    return config
 
 
 def log_debug(session_id: str, run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
@@ -114,11 +117,6 @@ def main():
     logger = logging.getLogger(__name__)
     
     try:
-        # Load configuration
-        config = load_config(args.config)
-        config.validate()
-        logger.info("Configuration loaded and validated")
-        
         # Setup database connection
         try:
             db_connector = DatabaseConnector()
@@ -127,6 +125,11 @@ def main():
             logger.error("Please ensure DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD are set")
             return 1
         logger.info("Database connector initialized")
+
+        # Load configuration
+        config = load_config(args.config, db_connector)
+        config.validate()
+        logger.info("Configuration loaded and validated")
         
         # #region agent log
         log_debug('debug-session', 'init', 'H1', 'main.py:main', 'Main function entry', {'continuous': args.continuous, 'interval': args.interval})

@@ -17,7 +17,6 @@ import {
   Settings,
   ChevronDown,
 } from 'lucide-react';
-import { exportDashboardToPDF } from '@/utils/pdfExport';
 import SmartGrid from '@/components/SmartGrid';
 import HierarchicalTabs, { type TabType } from '@/components/HierarchicalTabs';
 import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
@@ -170,9 +169,49 @@ export default function HierarchicalCampaignManager() {
     enabled: activeTab === 'placements' && selectedCampaign !== null,
   });
 
+  const filteredPortfolios = useMemo(() => {
+    return portfolios?.filter(p => {
+      if (statusFilter === 'all') return true;
+      return p.status?.toLowerCase() === statusFilter.toLowerCase();
+    }) || [];
+  }, [portfolios, statusFilter]);
+
+  const filteredCampaigns = useMemo(() => {
+    return campaigns?.filter(c => {
+      if (statusFilter === 'all') return true;
+      return c.status?.toLowerCase() === statusFilter.toLowerCase();
+    }) || [];
+  }, [campaigns, statusFilter]);
+
+  const filteredAdGroups = useMemo(() => {
+    return adGroups?.filter(ag => {
+      if (statusFilter === 'all') return true;
+      return ag.status?.toLowerCase() === statusFilter.toLowerCase();
+    }) || [];
+  }, [adGroups, statusFilter]);
+
+  const filteredAds = useMemo(() => {
+    return ads?.filter(ad => {
+      if (statusFilter === 'all') return true;
+      return ad.status?.toLowerCase() === statusFilter.toLowerCase();
+    }) || [];
+  }, [ads, statusFilter]);
+
+  const filteredKeywords = useMemo(() => {
+    return keywords?.filter(k => {
+      if (statusFilter === 'all') return true;
+      return k.state?.toLowerCase() === statusFilter.toLowerCase();
+    }) || [];
+  }, [keywords, statusFilter]);
+
   const actionMutation = useMutation({
-    mutationFn: ({ entityId, action }: { entityId: number; action: { action_type: string; new_value: number } }) =>
-      applyCampaignAction(entityId, action),
+    mutationFn: ({
+      entityId,
+      action,
+    }: {
+      entityId: number;
+      action: { action_type: string; new_value: number; old_value?: number; reason?: string };
+    }) => applyCampaignAction(entityId, action),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['ad-groups'] });
@@ -240,6 +279,148 @@ export default function HierarchicalCampaignManager() {
   const handleAdGroupClick = (adGroup: { ad_group_id: number; ad_group_name: string }) => {
     setSelectedAdGroup({ id: adGroup.ad_group_id, name: adGroup.ad_group_name });
     setActiveTab('keywords');
+  };
+
+  function formatCsvValue(value: unknown) {
+    if (value === null || value === undefined) return '';
+    const stringValue = String(value);
+    if (stringValue.includes('"') || stringValue.includes(',') || stringValue.includes('\n')) {
+      return `"${stringValue.replace(/"/g, '""')}"`;
+    }
+    return stringValue;
+  }
+
+  function downloadCsv(filename: string, rows: Record<string, unknown>[]) {
+    if (!rows.length) return;
+    const headers = Object.keys(rows[0]);
+    const lines = [
+      headers.map(formatCsvValue).join(','),
+      ...rows.map(row => headers.map(key => formatCsvValue(row[key])).join(',')),
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  }
+
+  const handleExportCsv = () => {
+    const today = new Date().toISOString().split('T')[0];
+    const payload = (() => {
+      switch (activeTab) {
+        case 'portfolios':
+          return {
+            filename: `portfolios-${today}.csv`,
+            rows: filteredPortfolios.map(p => ({
+              portfolio_name: p.portfolio_name,
+              status: p.status,
+              campaign_count: p.campaign_count,
+              total_spend: p.total_spend,
+              total_sales: p.total_sales,
+              acos: p.acos,
+            })),
+          };
+        case 'campaigns':
+          return {
+            filename: `campaigns-${today}.csv`,
+            rows: filteredCampaigns.map(c => ({
+              campaign_name: c.campaign_name,
+              status: c.status,
+              spend: c.spend,
+              sales: c.sales,
+              acos: c.acos,
+              roas: c.roas,
+              orders: c.orders,
+              campaign_type: c.campaign_type,
+              portfolio_name: c.portfolio_name,
+            })),
+          };
+        case 'ad_groups':
+          return {
+            filename: `ad-groups-${today}.csv`,
+            rows: filteredAdGroups.map(ag => ({
+              ad_group_name: ag.ad_group_name,
+              status: ag.status,
+              spend: ag.spend,
+              sales: ag.sales,
+              acos: ag.acos,
+              orders: ag.orders,
+            })),
+          };
+        case 'ads':
+          return {
+            filename: `ads-${today}.csv`,
+            rows: filteredAds.map(ad => ({
+              asin: ad.asin,
+              sku: ad.sku,
+              status: ad.status,
+              impressions: ad.impressions,
+              clicks: ad.clicks,
+              spend: ad.spend,
+              sales: ad.sales,
+              acos: ad.acos,
+              roas: ad.roas,
+              orders: ad.orders,
+            })),
+          };
+        case 'keywords':
+          return {
+            filename: `keywords-${today}.csv`,
+            rows: filteredKeywords.map(k => ({
+              keyword_text: k.keyword_text,
+              match_type: k.match_type,
+              bid: k.bid,
+              spend: k.spend,
+              sales: k.sales,
+              acos: k.acos,
+              orders: k.orders,
+            })),
+          };
+        case 'targeting':
+          return {
+            filename: `targeting-${today}.csv`,
+            rows: (targeting || []).map(t => ({
+              target_value: t.target_value,
+              target_type: t.target_type,
+              bid: t.bid,
+              spend: t.spend,
+              sales: t.sales,
+              acos: t.acos,
+            })),
+          };
+        case 'search_terms':
+          return {
+            filename: `search-terms-${today}.csv`,
+            rows: (searchTerms || []).map(t => ({
+              search_term: t.search_term,
+              impressions: t.impressions,
+              clicks: t.clicks,
+              spend: t.spend,
+              sales: t.sales,
+              orders: t.orders,
+              harvest_action: t.harvest_action,
+            })),
+          };
+        case 'placements':
+          return {
+            filename: `placements-${today}.csv`,
+            rows: (placements || []).map(p => ({
+              placement: p.placement,
+              impressions: p.impressions,
+              clicks: p.clicks,
+              spend: p.spend,
+              sales: p.sales,
+              acos: p.acos,
+            })),
+          };
+        default:
+          return { filename: `export-${today}.csv`, rows: [] };
+      }
+    })();
+    downloadCsv(payload.filename, payload.rows);
   };
 
   // Render content based on active tab
@@ -336,14 +517,9 @@ export default function HierarchicalCampaignManager() {
   };
 
   const renderPortfolios = () => {
-    const filtered = portfolios?.filter(p => {
-      if (statusFilter === 'all') return true;
-      return p.status?.toLowerCase() === statusFilter.toLowerCase();
-    }) || [];
-
     return (
       <SmartGrid
-        data={filtered}
+        data={filteredPortfolios}
         columns={[
           {
             key: 'portfolio_name',
@@ -415,11 +591,6 @@ export default function HierarchicalCampaignManager() {
   };
 
   const renderCampaigns = () => {
-    const filtered = campaigns?.filter(c => {
-      if (statusFilter === 'all') return true;
-      return c.status?.toLowerCase() === statusFilter.toLowerCase();
-    }) || [];
-
     return (
       <div className="space-y-4">
         {/* Toolbar */}
@@ -451,19 +622,18 @@ export default function HierarchicalCampaignManager() {
               </button>
               <button
                 onClick={() => {
-                  exportDashboardToPDF('campaign-manager-content', `campaign-manager-${new Date().toISOString().split('T')[0]}.pdf`)
-                    .catch(err => console.error('PDF export failed:', err));
+                  handleExportCsv();
                 }}
                 className="btn btn-sm btn-secondary"
               >
                 <FileDown className="w-4 h-4" />
-                Export
+                Export CSV
               </button>
             </div>
           </div>
         </div>
         <SmartGrid
-          data={filtered}
+          data={filteredCampaigns}
           statusFilter={statusFilter}
           onStatusFilterChange={setStatusFilter}
           statusFilterOptions={[
@@ -602,19 +772,47 @@ export default function HierarchicalCampaignManager() {
             header: 'Actions',
             render: (value: unknown, row: Campaign) => (
               <div className="flex items-center gap-2">
-                {!row.portfolio_id && (
+                {String(row.status || '').toLowerCase() === 'enabled' && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowPortfolioModal(true);
-                      setSelectedRows(new Set([row.campaign_id]));
+                      actionMutation.mutate({
+                        entityId: row.campaign_id,
+                        action: { action_type: 'pause', new_value: 0, reason: 'Manual pause from dashboard' },
+                      });
                     }}
                     className="btn btn-sm btn-secondary"
-                    title="Add to Portfolio"
+                    title="Pause Campaign"
                   >
-                    <Package className="w-3 h-3" />
+                    <Pause className="w-3 h-3" />
                   </button>
                 )}
+                {String(row.status || '').toLowerCase() !== 'enabled' && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      actionMutation.mutate({
+                        entityId: row.campaign_id,
+                        action: { action_type: 'enable', new_value: 1, reason: 'Manual enable from dashboard' },
+                      });
+                    }}
+                    className="btn btn-sm btn-secondary"
+                    title="Enable Campaign"
+                  >
+                    <Play className="w-3 h-3" />
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowPortfolioModal(true);
+                    setSelectedRows(new Set([row.campaign_id]));
+                  }}
+                  className="btn btn-sm btn-secondary"
+                  title={row.portfolio_id ? 'Move to Portfolio' : 'Add to Portfolio'}
+                >
+                  <Package className="w-3 h-3" />
+                </button>
               </div>
             ),
           },
@@ -628,14 +826,9 @@ export default function HierarchicalCampaignManager() {
   };
 
   const renderAdGroups = () => {
-    const filtered = adGroups?.filter(ag => {
-      if (statusFilter === 'all') return true;
-      return ag.status?.toLowerCase() === statusFilter.toLowerCase();
-    }) || [];
-
     return (
       <SmartGrid
-        data={filtered}
+        data={filteredAdGroups}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         columns={[
@@ -713,14 +906,9 @@ export default function HierarchicalCampaignManager() {
   };
 
   const renderAds = () => {
-    const filtered = ads?.filter(ad => {
-      if (statusFilter === 'all') return true;
-      return ad.status?.toLowerCase() === statusFilter.toLowerCase();
-    }) || [];
-
     return (
       <SmartGrid
-        data={filtered}
+        data={filteredAds}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         columns={[
@@ -826,14 +1014,9 @@ export default function HierarchicalCampaignManager() {
   };
 
   const renderKeywords = () => {
-    const filtered = keywords?.filter(k => {
-      if (statusFilter === 'all') return true;
-      return k.state?.toLowerCase() === statusFilter.toLowerCase();
-    }) || [];
-
     return (
       <SmartGrid
-        data={filtered}
+        data={filteredKeywords}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         columns={[

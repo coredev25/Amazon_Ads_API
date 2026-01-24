@@ -77,6 +77,27 @@ class PasswordChange(BaseModel):
 
 
 # ============================================================================
+# DATABASE DEPENDENCY
+# ============================================================================
+
+def get_db():
+    """Database dependency"""
+    # Import here to avoid circular imports
+    try:
+        from dashboard.api.main import db_connector
+        if db_connector is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database connection not available"
+            )
+        return db_connector
+    except (ImportError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database connection not available"
+        )
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
@@ -420,15 +441,10 @@ def authenticate_user(db_connector, username: str, password: str) -> Optional[di
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db_connector = None
-) -> dict:
+    db_connector = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> UserResponse:
     """Dependency to get the current authenticated user"""
-    if db_connector is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database connection not available"
-        )
     
     token = credentials.credentials
     payload = decode_token(token)
@@ -459,20 +475,29 @@ def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     if not user['is_active']:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
         )
-    
-    return user
+
+    return UserResponse(
+        id=user['id'],
+        email=user['email'],
+        username=user['username'],
+        role=user['role'],
+        is_active=user['is_active'],
+        is_verified=user['is_verified'],
+        last_login=user['last_login'].isoformat() if user['last_login'] else None,
+        created_at=user['created_at'].isoformat()
+    )
 
 
 def require_role(required_role: str):
     """Dependency to require a specific role"""
-    def role_checker(user: dict = Depends(get_current_user)) -> dict:
-        if user['role'] != required_role and user['role'] != 'admin':
+    def role_checker(user: UserResponse = Depends(get_current_user)) -> UserResponse:
+        if user.role != required_role and user.role != 'admin':
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Insufficient permissions"

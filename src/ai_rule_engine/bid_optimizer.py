@@ -378,7 +378,7 @@ class BidOptimizationEngine:
         
         # Calculate performance-based adjustment (with new strategy matrix logic)
         performance_adjustment = self._calculate_performance_adjustment(
-            filtered_performance_data, low_data_result, entity_id, entity_type
+            filtered_performance_data, low_data_result, entity_id, entity_type, entity_data
         )
         
         # Add trend adjustment
@@ -792,7 +792,8 @@ class BidOptimizationEngine:
     
     def _calculate_performance_adjustment(self, performance_data: List[Dict[str, Any]],
                                         low_data_result: Dict[str, Any] = None,
-                                        entity_id: int = 0, entity_type: str = 'keyword') -> float:
+                                        entity_id: int = 0, entity_type: str = 'keyword',
+                                        entity_data: Optional[Dict[str, Any]] = None) -> float:
         """
         Calculate bid adjustment based on performance metrics with new strategy matrix:
         - ACOS-based rank zones (A+, A, B, C, D, E)
@@ -820,7 +821,7 @@ class BidOptimizationEngine:
         # These override ACOS-based logic when there are no sales
         if total_sales == 0:
             return self._handle_no_sale_scenarios(
-                total_impressions, total_clicks, total_cost, entity_id, entity_type
+                total_impressions, total_clicks, total_cost, entity_id, entity_type, entity_data
             )
         
         # PRIORITY 2: ACOS-based rank zones with order-based scaling
@@ -849,12 +850,80 @@ class BidOptimizationEngine:
         return max(-0.30, min(0.35, adjustment))
     
     def _handle_no_sale_scenarios(self, total_impressions: int, total_clicks: int, 
-                                   total_spend: float, entity_id: int, entity_type: str) -> float:
+                                   total_spend: float, entity_id: int, entity_type: str,
+                                   entity_data: Optional[Dict[str, Any]] = None) -> float:
         """
         Handle No Sale scenarios (NS-1 through NS-6) based on the strategy matrix
         
         Returns bid adjustment as a percentage (e.g., 0.15 for +15%, -0.30 for -30%)
         """
+        portfolio_rule = self._get_portfolio_no_sales_rule(entity_data)
+        if portfolio_rule:
+            spend_min = self._to_float(portfolio_rule.get('spend_min'))
+            spend_max = self._to_float(portfolio_rule.get('spend_max'))
+            if spend_min is not None and spend_max is not None and spend_min >= 0 and spend_max > spend_min:
+                zero_activity_multiplier = self._get_rule_multiplier(
+                    portfolio_rule, 'zero_activity_multiplier', 'no_sales_zero_activity_multiplier', 1.15
+                )
+                low_spend_multiplier = self._get_rule_multiplier(
+                    portfolio_rule, 'low_spend_multiplier', 'no_sales_low_spend_multiplier', 1.10
+                )
+                medium_spend_multiplier = self._get_rule_multiplier(
+                    portfolio_rule, 'medium_spend_multiplier', 'no_sales_medium_spend_multiplier', 0.90
+                )
+                high_spend_multiplier = self._get_rule_multiplier(
+                    portfolio_rule, 'high_spend_multiplier', 'no_sales_high_spend_multiplier', 0.80
+                )
+                high_spend_clicks_max = self._to_int(portfolio_rule.get('high_spend_clicks_max'))
+                high_spend_few_clicks_multiplier = self._get_rule_multiplier(
+                    portfolio_rule, 'high_spend_few_clicks_multiplier', 'no_sales_high_spend_few_clicks_multiplier', None
+                )
+                portfolio_name = (entity_data or {}).get('portfolio_name', 'Unknown')
+
+                if total_clicks == 0 and total_spend == 0:
+                    adjustment = zero_activity_multiplier - 1.0
+                    self.logger.info(
+                        f"No-Sale Zero Activity ({portfolio_name}): clicks=0 spend=$0.00, "
+                        f"adjustment={adjustment:+.1%}"
+                    )
+                    return adjustment
+
+                if total_spend < spend_min:
+                    adjustment = low_spend_multiplier - 1.0
+                    self.logger.info(
+                        f"No-Sale Low Spend ({portfolio_name}): spend=${total_spend:.2f} < ${spend_min:.2f}, "
+                        f"adjustment={adjustment:+.1%}"
+                    )
+                    return adjustment
+
+                if total_spend < spend_max:
+                    adjustment = medium_spend_multiplier - 1.0
+                    self.logger.info(
+                        f"No-Sale Medium Spend ({portfolio_name}): spend=${total_spend:.2f} "
+                        f"between ${spend_min:.2f}-${spend_max:.2f}, adjustment={adjustment:+.1%}"
+                    )
+                    return adjustment
+
+                if high_spend_clicks_max is not None and total_clicks < high_spend_clicks_max and high_spend_few_clicks_multiplier:
+                    adjustment = high_spend_few_clicks_multiplier - 1.0
+                    self.logger.info(
+                        f"No-Sale High Spend Few Clicks ({portfolio_name}): spend=${total_spend:.2f} "
+                        f">= ${spend_max:.2f}, clicks={total_clicks} < {high_spend_clicks_max}, "
+                        f"adjustment={adjustment:+.1%}"
+                    )
+                    return adjustment
+
+                adjustment = high_spend_multiplier - 1.0
+                self.logger.info(
+                    f"No-Sale High Spend ({portfolio_name}): spend=${total_spend:.2f} >= ${spend_max:.2f}, "
+                    f"adjustment={adjustment:+.1%}"
+                )
+                return adjustment
+            else:
+                self.logger.warning(
+                    f"Invalid portfolio no-sale thresholds for {entity_type} {entity_id}: "
+                    f"spend_min={spend_min}, spend_max={spend_max}. Falling back to defaults."
+                )
         # NS-1: No Clicks / No Activity (Impressions < 500)
         if total_impressions <= self.config.get('ns1_no_clicks_no_activity_impr_max', 500):
             multiplier = self.config.get('ns1_bid_adjustment', 1.15)
@@ -904,6 +973,66 @@ class BidOptimizationEngine:
         
         # Default: No specific scenario matched, return 0
         return 0.0
+
+    def _get_portfolio_no_sales_rule(self, entity_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not entity_data:
+            return None
+        portfolio_name = (entity_data.get('portfolio_name') or '').strip()
+        if not portfolio_name:
+            return None
+        portfolio_rules = self.config.get('portfolio_no_sales_rules') or {}
+        if not isinstance(portfolio_rules, dict) or not portfolio_rules:
+            return None
+        normalized_name = portfolio_name.lower()
+        for rule_key, rule in portfolio_rules.items():
+            if not rule_key or not isinstance(rule, dict):
+                continue
+            rule_key_normalized = str(rule_key).lower()
+            match_type = str(rule.get('match_type', 'contains')).lower()
+            aliases = rule.get('aliases') or []
+            if match_type == 'exact' and normalized_name == rule_key_normalized:
+                return rule
+            if match_type != 'exact' and rule_key_normalized in normalized_name:
+                return rule
+            for alias in aliases:
+                if not alias:
+                    continue
+                alias_normalized = str(alias).lower()
+                if alias_normalized in normalized_name:
+                    return rule
+        return None
+
+    def _get_rule_multiplier(self, rule: Dict[str, Any], rule_key: str, config_key: str,
+                             fallback: Optional[float]) -> Optional[float]:
+        rule_value = rule.get(rule_key)
+        if rule_value is not None:
+            parsed = self._to_float(rule_value)
+            if parsed is not None:
+                return parsed
+        config_value = self.config.get(config_key)
+        if config_value is not None:
+            parsed = self._to_float(config_value)
+            if parsed is not None:
+                return parsed
+        if fallback is None:
+            return None
+        return fallback
+
+    def _to_float(self, value: Any) -> Optional[float]:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _to_int(self, value: Any) -> Optional[int]:
+        try:
+            if value is None:
+                return None
+            return int(value)
+        except (TypeError, ValueError):
+            return None
     
     def _determine_acos_rank(self, current_acos: float) -> str:
         """

@@ -176,6 +176,12 @@ class RuleConfig:
     no_sale_reduction_tier_1: float = 0.15  # 15% bid reduction at $10-15
     no_sale_reduction_tier_2: float = 0.25  # 25% bid reduction at $16-30
     no_sale_reduction_tier_3: float = 0.35  # 35% bid reduction at >$30
+    # Portfolio-Specific No Sale Logic (dynamic thresholds by portfolio)
+    portfolio_no_sales_rules: Dict[str, Any] = field(default_factory=dict)
+    no_sales_zero_activity_multiplier: float = 1.15
+    no_sales_low_spend_multiplier: float = 1.10
+    no_sales_medium_spend_multiplier: float = 0.90
+    no_sales_high_spend_multiplier: float = 0.80
     
     # CTR Combined Logic Configuration
     ctr_critical_threshold: float = 0.2  # CTR < 0.2% triggers combined logic
@@ -528,6 +534,11 @@ class RuleConfig:
             'no_sale_reduction_tier_1': self.no_sale_reduction_tier_1,
             'no_sale_reduction_tier_2': self.no_sale_reduction_tier_2,
             'no_sale_reduction_tier_3': self.no_sale_reduction_tier_3,
+            'portfolio_no_sales_rules': self.portfolio_no_sales_rules,
+            'no_sales_zero_activity_multiplier': self.no_sales_zero_activity_multiplier,
+            'no_sales_low_spend_multiplier': self.no_sales_low_spend_multiplier,
+            'no_sales_medium_spend_multiplier': self.no_sales_medium_spend_multiplier,
+            'no_sales_high_spend_multiplier': self.no_sales_high_spend_multiplier,
             'ctr_critical_threshold': self.ctr_critical_threshold,
             'enable_ctr_combined_logic': self.enable_ctr_combined_logic,
             'ctr_low_spend_threshold': self.ctr_low_spend_threshold,
@@ -617,6 +628,7 @@ class RuleConfig:
                 'budget': ['budget_'],
                 'learning': ['learning_', 'min_training', 'warm_up', 'min_test_', 'max_model_'],
                 'optimization': ['weight_', 'aggressive_', 'enable_advanced_bid_optimization'],
+                'no_sales': ['no_sales_', 'portfolio_no_sales_rules'],
                 'negative': ['negative_', 'use_temporary_holds', 'temporary_hold'],
                 'safety': ['enable_spend_safeguard', 'enable_clicks_safeguard', 'spend_spike', 
                           'clicks_spike', 'safeguard_', 'enable_comprehensive_safety_veto',
