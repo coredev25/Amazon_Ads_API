@@ -2386,6 +2386,8 @@ async def get_recommendations(
     try:
         # Get recommendations from database
         recommendations = []
+        db_rec_count = 0
+        skipped_count = 0
         try:
             with db_connector.get_connection() as conn:
                 import psycopg2.extras
@@ -2408,100 +2410,152 @@ async def get_recommendations(
                     
                     cursor.execute(query, params)
                     db_recs = cursor.fetchall()
+                    db_rec_count = len(db_recs)
+                    logger.info(f"Found {db_rec_count} pending recommendations in database")
+                    
+                    # Pre-fetch entity names in bulk to avoid per-record queries
+                    entity_names = {}
+                    if db_recs:
+                        keyword_ids = [r['entity_id'] for r in db_recs if r.get('entity_type') == 'keyword']
+                        campaign_ids = [r['entity_id'] for r in db_recs if r.get('entity_type') == 'campaign']
+                        ad_group_ids = [r['entity_id'] for r in db_recs if r.get('entity_type') == 'ad_group']
+                        
+                        if keyword_ids:
+                            try:
+                                placeholders = ','.join(['%s'] * len(keyword_ids))
+                                cursor.execute(f"SELECT keyword_id, keyword_text FROM keywords WHERE keyword_id IN ({placeholders})", keyword_ids)
+                                for row in cursor.fetchall():
+                                    entity_names[('keyword', row['keyword_id'])] = row['keyword_text']
+                            except Exception:
+                                pass
+                        
+                        if campaign_ids:
+                            try:
+                                placeholders = ','.join(['%s'] * len(campaign_ids))
+                                cursor.execute(f"SELECT campaign_id, campaign_name FROM campaigns WHERE campaign_id IN ({placeholders})", campaign_ids)
+                                for row in cursor.fetchall():
+                                    entity_names[('campaign', row['campaign_id'])] = row['campaign_name']
+                            except Exception:
+                                pass
+                        
+                        if ad_group_ids:
+                            try:
+                                placeholders = ','.join(['%s'] * len(ad_group_ids))
+                                cursor.execute(f"SELECT ad_group_id, ad_group_name FROM ad_groups WHERE ad_group_id IN ({placeholders})", ad_group_ids)
+                                for row in cursor.fetchall():
+                                    entity_names[('ad_group', row['ad_group_id'])] = row['ad_group_name']
+                            except Exception:
+                                pass
                     
                     for rec in db_recs:
-                        # Determine priority based on intelligence signals
-                        signals = rec.get('intelligence_signals') or {}
-                        if isinstance(signals, str):
-                            try:
-                                signals = json.loads(signals)
-                            except:
-                                signals = {}
-                        
-                        # Calculate priority
-                        adjustment_pct = abs(((rec['recommended_value'] - rec['current_value']) / rec['current_value'] * 100) if rec['current_value'] else 0)
-                        if adjustment_pct > 30:
-                            rec_priority = 'critical'
-                        elif adjustment_pct > 20:
-                            rec_priority = 'high'
-                        elif adjustment_pct > 10:
-                            rec_priority = 'medium'
-                        else:
-                            rec_priority = 'low'
-                        
-                        if priority and rec_priority != priority:
-                            continue
-                        
-                        # Get entity name
-                        entity_name = f"{rec['entity_type']} {rec['entity_id']}"
                         try:
-                            if rec['entity_type'] == 'keyword':
-                                cursor.execute("SELECT keyword_text FROM keywords WHERE keyword_id = %s", (rec['entity_id'],))
-                                kw = cursor.fetchone()
-                                if kw:
-                                    entity_name = kw['keyword_text']
-                            elif rec['entity_type'] == 'campaign':
-                                cursor.execute("SELECT campaign_name FROM campaigns WHERE campaign_id = %s", (rec['entity_id'],))
-                                c = cursor.fetchone()
-                                if c:
-                                    entity_name = c['campaign_name']
-                        except:
-                            pass
-                        
-                        # Build reason from signals
-                        reason = _build_recommendation_reason(signals, rec['adjustment_type'])
-                        
-                        recommendations.append(RecommendationData(
-                            id=rec['recommendation_id'],
-                            entity_type=rec['entity_type'],
-                            entity_id=rec['entity_id'],
-                            entity_name=entity_name,
-                            recommendation_type=rec['adjustment_type'],
-                            current_value=rec['current_value'],
-                            recommended_value=rec['recommended_value'],
-                            adjustment_percentage=adjustment_pct if rec['recommended_value'] > rec['current_value'] else -adjustment_pct,
-                            priority=rec_priority,
-                            confidence=signals.get('confidence', 0.7),
-                            reason=reason,
-                            estimated_impact=_calculate_estimated_impact_str(rec),
-                            intelligence_signals=signals,
-                            created_at=rec['created_at'].isoformat(),
-                            status="pending"
-                        ))
+                            # Determine priority based on intelligence signals
+                            signals = rec.get('intelligence_signals') or {}
+                            if isinstance(signals, str):
+                                try:
+                                    signals = json.loads(signals)
+                                except Exception:
+                                    signals = {}
+                            if not isinstance(signals, dict):
+                                signals = {}
+                            
+                            # Calculate priority
+                            current_val = float(rec.get('current_value') or 0)
+                            recommended_val = float(rec.get('recommended_value') or 0)
+                            adjustment_pct = abs(((recommended_val - current_val) / current_val * 100) if current_val else 0)
+                            if adjustment_pct > 30:
+                                rec_priority = 'critical'
+                            elif adjustment_pct > 20:
+                                rec_priority = 'high'
+                            elif adjustment_pct > 10:
+                                rec_priority = 'medium'
+                            else:
+                                rec_priority = 'low'
+                            
+                            if priority and rec_priority != priority:
+                                continue
+                            
+                            # Get entity name from pre-fetched map
+                            entity_type_str = str(rec.get('entity_type', 'unknown'))
+                            entity_id_val = rec.get('entity_id', 0)
+                            entity_name = entity_names.get((entity_type_str, entity_id_val), f"{entity_type_str} {entity_id_val}")
+                            
+                            # Build reason from signals
+                            adjustment_type_str = str(rec.get('adjustment_type', 'bid'))
+                            reason = _build_recommendation_reason(signals, adjustment_type_str)
+                            
+                            # Parse created_at safely
+                            created_at_val = rec.get('created_at')
+                            if hasattr(created_at_val, 'isoformat'):
+                                created_at_str = created_at_val.isoformat()
+                            elif created_at_val:
+                                created_at_str = str(created_at_val)
+                            else:
+                                created_at_str = datetime.now().isoformat()
+                            
+                            recommendations.append(RecommendationData(
+                                id=str(rec.get('recommendation_id', f'rec_{entity_id_val}')),
+                                entity_type=entity_type_str,
+                                entity_id=int(entity_id_val),
+                                entity_name=entity_name,
+                                recommendation_type=adjustment_type_str,
+                                current_value=current_val,
+                                recommended_value=recommended_val,
+                                adjustment_percentage=adjustment_pct if recommended_val > current_val else -adjustment_pct,
+                                priority=rec_priority,
+                                confidence=float(signals.get('confidence', 0.7) or 0.7),
+                                reason=reason,
+                                estimated_impact=_calculate_estimated_impact_str(rec),
+                                intelligence_signals=signals if isinstance(signals, dict) else {},
+                                created_at=created_at_str,
+                                status="pending"
+                            ))
+                        except Exception as rec_err:
+                            skipped_count += 1
+                            logger.warning(f"Skipping bad recommendation record {rec.get('recommendation_id', '?')}: {rec_err}", exc_info=True)
+                    
+                    if skipped_count > 0:
+                        logger.warning(f"Skipped {skipped_count} of {db_rec_count} recommendation records due to errors")
         except Exception as e:
-            logger.warning(f"Could not get recommendations from database: {e}")
+            logger.error(f"Could not get recommendations from database: {e}", exc_info=True)
         
         # If no recommendations in database, run analysis
         if not recommendations:
+            logger.info(f"No processed recommendations from DB (had {db_rec_count} raw records, skipped {skipped_count}). Running AI analysis...")
             try:
                 recs = ai_engine.analyze_campaigns()
+                logger.info(f"AI analysis returned {len(recs)} recommendations")
                 for rec in recs[:limit]:
-                    if recommendation_type and rec.adjustment_type != recommendation_type:
-                        continue
-                    if priority and rec.priority != priority:
-                        continue
-                    
-                    impact = _calculate_estimated_impact(rec)
-                    
-                    recommendations.append(RecommendationData(
-                        id=f"{rec.entity_type}_{rec.entity_id}_{rec.created_at.timestamp()}",
-                        entity_type=rec.entity_type,
-                        entity_id=rec.entity_id,
-                        entity_name=rec.entity_name,
-                        recommendation_type=rec.adjustment_type,
-                        current_value=rec.current_value,
-                        recommended_value=rec.recommended_value,
-                        adjustment_percentage=rec.adjustment_percentage,
-                        priority=rec.priority,
-                        confidence=rec.confidence,
-                        reason=rec.reason,
-                        estimated_impact=impact,
-                        created_at=rec.created_at.isoformat(),
-                        status="pending"
-                    ))
+                    try:
+                        if recommendation_type and rec.adjustment_type != recommendation_type:
+                            continue
+                        if priority and rec.priority != priority:
+                            continue
+                        
+                        impact = _calculate_estimated_impact(rec)
+                        
+                        recommendations.append(RecommendationData(
+                            id=f"{rec.entity_type}_{rec.entity_id}_{rec.created_at.timestamp()}",
+                            entity_type=rec.entity_type,
+                            entity_id=int(rec.entity_id),
+                            entity_name=getattr(rec, 'entity_name', f"{rec.entity_type} {rec.entity_id}"),
+                            recommendation_type=rec.adjustment_type,
+                            current_value=float(rec.current_value or 0),
+                            recommended_value=float(rec.recommended_value or 0),
+                            adjustment_percentage=float(rec.adjustment_percentage or 0),
+                            priority=rec.priority or 'medium',
+                            confidence=float(rec.confidence or 0.5),
+                            reason=rec.reason or f"AI-optimized {rec.adjustment_type} recommendation",
+                            estimated_impact=impact,
+                            created_at=rec.created_at.isoformat() if hasattr(rec.created_at, 'isoformat') else str(rec.created_at),
+                            status="pending"
+                        ))
+                    except Exception as rec_err:
+                        logger.warning(f"Skipping bad AI recommendation for {getattr(rec, 'entity_type', '?')}_{getattr(rec, 'entity_id', '?')}: {rec_err}", exc_info=True)
             except Exception as e:
-                logger.warning(f"Could not run AI analysis: {e}")
+                logger.warning(f"Could not run AI analysis: {e}", exc_info=True)
         
+        logger.info(f"Returning {len(recommendations)} recommendations")
         return recommendations[:limit]
     except Exception as e:
         logger.error(f"Error fetching recommendations: {e}")
@@ -3731,53 +3785,83 @@ async def get_ad_groups(
     campaign_id: Optional[int] = None,
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=10, le=200),
+    page_size: int = Query(50, ge=1, le=200),
 ):
     """Get ad groups with performance data (paginated)"""
     try:
-        ad_groups = db_connector.get_ad_groups_with_performance(campaign_id, days) if campaign_id else []
+        ad_groups = []
+        if campaign_id:
+            try:
+                ad_groups = db_connector.get_ad_groups_with_performance(campaign_id, days, min_impressions=0)
+            except Exception as db_err:
+                logger.warning(f"Error querying ad groups from performance method: {db_err}")
+                # Fallback: query ad_groups table directly without performance data
+                try:
+                    with db_connector.get_connection() as conn:
+                        import psycopg2.extras
+                        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                            cursor.execute("""
+                                SELECT ag.ad_group_id, ag.ad_group_name, ag.campaign_id,
+                                       ag.default_bid, ag.state,
+                                       0 as total_impressions, 0 as total_clicks,
+                                       0 as total_cost, 0 as total_conversions, 0 as total_sales
+                                FROM ad_groups ag
+                                WHERE ag.campaign_id = %s
+                                ORDER BY ag.ad_group_name
+                            """, (campaign_id,))
+                            ad_groups = cursor.fetchall()
+                except Exception as fallback_err:
+                    logger.error(f"Fallback ad groups query also failed: {fallback_err}")
         
         # Get campaigns for ad group names
         campaigns_map = {}
         if ad_groups:
-            with db_connector.get_connection() as conn:
-                import psycopg2.extras
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                    campaign_ids = list(set([ag['campaign_id'] for ag in ad_groups]))
-                    placeholders = ','.join(['%s'] * len(campaign_ids))
-                    cursor.execute(f"""
-                        SELECT campaign_id, campaign_name 
-                        FROM campaigns 
-                        WHERE campaign_id IN ({placeholders})
-                    """, campaign_ids)
-                    for row in cursor.fetchall():
-                        campaigns_map[row['campaign_id']] = row['campaign_name']
+            try:
+                with db_connector.get_connection() as conn:
+                    import psycopg2.extras
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                        campaign_ids = list(set([ag['campaign_id'] for ag in ad_groups if ag.get('campaign_id')]))
+                        if campaign_ids:
+                            placeholders = ','.join(['%s'] * len(campaign_ids))
+                            cursor.execute(f"""
+                                SELECT campaign_id, campaign_name 
+                                FROM campaigns 
+                                WHERE campaign_id IN ({placeholders})
+                            """, campaign_ids)
+                            for row in cursor.fetchall():
+                                campaigns_map[row['campaign_id']] = row['campaign_name']
+            except Exception as e:
+                logger.warning(f"Could not fetch campaign names for ad groups: {e}")
         
         result = []
         for ag in ad_groups:
-            spend = float(ag.get('total_cost', 0) or 0)
-            sales = float(ag.get('total_sales', 0) or 0)
-            impressions = int(ag.get('total_impressions', 0) or 0)
-            clicks = int(ag.get('total_clicks', 0) or 0)
-            orders = int(ag.get('total_conversions', 0) or 0)
-            
-            result.append(AdGroupData(
-                ad_group_id=ag['ad_group_id'],
-                ad_group_name=ag.get('ad_group_name', ''),
-                campaign_id=ag['campaign_id'],
-                campaign_name=campaigns_map.get(ag['campaign_id'], ''),
-                default_bid=float(ag.get('default_bid', 0) or 0),
-                status=ag.get('state', 'ENABLED'),
-                spend=spend,
-                sales=sales,
-                acos=round(spend / sales * 100, 2) if sales > 0 else None,
-                roas=round(sales / spend, 2) if spend > 0 else None,
-                orders=orders,
-                impressions=impressions,
-                clicks=clicks,
-                ctr=round(clicks / impressions * 100, 2) if impressions > 0 else 0,
-                cvr=round(orders / clicks * 100, 2) if clicks > 0 else 0
-            ))
+            try:
+                spend = float(ag.get('total_cost', 0) or 0)
+                sales = float(ag.get('total_sales', 0) or 0)
+                impressions = int(float(ag.get('total_impressions', 0) or 0))
+                clicks = int(float(ag.get('total_clicks', 0) or 0))
+                orders = int(float(ag.get('total_conversions', 0) or 0))
+                
+                result.append(AdGroupData(
+                    ad_group_id=ag['ad_group_id'],
+                    ad_group_name=ag.get('ad_group_name', '') or '',
+                    campaign_id=ag['campaign_id'],
+                    campaign_name=campaigns_map.get(ag['campaign_id'], ''),
+                    default_bid=float(ag.get('default_bid', 0) or 0),
+                    status=_normalize_campaign_state(ag.get('state', 'ENABLED')),
+                    spend=spend,
+                    sales=sales,
+                    acos=round(spend / sales * 100, 2) if sales > 0 else None,
+                    roas=round(sales / spend, 2) if spend > 0 else None,
+                    orders=orders,
+                    impressions=impressions,
+                    clicks=clicks,
+                    ctr=round(clicks / impressions * 100, 2) if impressions > 0 else 0,
+                    cvr=round(orders / clicks * 100, 2) if clicks > 0 else 0
+                ))
+            except Exception as item_err:
+                logger.warning(f"Error processing ad group {ag.get('ad_group_id')}: {item_err}")
+                continue
         
         total = len(result)
         total_pages = max(1, (total + page_size - 1) // page_size)
@@ -3785,7 +3869,7 @@ async def get_ad_groups(
         end = start + page_size
         return {"data": result[start:end], "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
     except Exception as e:
-        logger.error(f"Error fetching ad groups: {e}")
+        logger.error(f"Error fetching ad groups: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

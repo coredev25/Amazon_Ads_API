@@ -123,9 +123,9 @@ class AIRuleEngine:
             )
             all_recommendations.extend(campaign_recs)
             
-            # Analyze ad groups
+            # Analyze ad groups (min 50 impressions for AI analysis)
             ad_groups = self.db.get_ad_groups_with_performance(
-                campaign_id, self.config.performance_lookback_days
+                campaign_id, self.config.performance_lookback_days, min_impressions=50
             )
             
             for ad_group in ad_groups:
@@ -569,9 +569,9 @@ class AIRuleEngine:
         
         candidates = []
         
-        # Get keywords for campaign
+        # Get keywords for campaign (min 50 impressions for AI analysis)
         ad_groups = self.db.get_ad_groups_with_performance(
-            campaign_id, self.config.performance_lookback_days
+            campaign_id, self.config.performance_lookback_days, min_impressions=50
         )
         
         for ad_group in ad_groups:

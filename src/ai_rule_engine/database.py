@@ -283,13 +283,14 @@ class DatabaseConnector:
                 cursor.execute(query, params)
                 return cursor.fetchall()
     
-    def get_ad_groups_with_performance(self, campaign_id: int, days_back: int = 7) -> List[Dict[str, Any]]:
+    def get_ad_groups_with_performance(self, campaign_id: int, days_back: int = 7, min_impressions: int = 0) -> List[Dict[str, Any]]:
         """
         Get ad groups for a campaign with their performance data
         
         Args:
             campaign_id: Campaign ID
             days_back: Number of days to look back
+            min_impressions: Minimum impressions threshold (0 = show all)
             
         Returns:
             List of ad groups with aggregated performance
@@ -298,6 +299,7 @@ class DatabaseConnector:
         SELECT 
             ag.ad_group_id,
             ag.ad_group_name,
+            ag.campaign_id,
             ag.default_bid,
             ag.state,
             COALESCE(SUM(agp.impressions), 0) as total_impressions,
@@ -320,18 +322,22 @@ class DatabaseConnector:
         FROM ad_groups ag
         LEFT JOIN ad_group_performance agp ON ag.ad_group_id = agp.ad_group_id 
             AND agp.report_date >= %s
-        WHERE ag.campaign_id = %s AND ag.state = 'ENABLED'
-        GROUP BY ag.ad_group_id, ag.ad_group_name, ag.default_bid, ag.state
-        HAVING SUM(agp.impressions) >= %s
-        ORDER BY total_cost DESC
+        WHERE ag.campaign_id = %s
+        GROUP BY ag.ad_group_id, ag.ad_group_name, ag.campaign_id, ag.default_bid, ag.state
         """
         
         start_date = datetime.now() - timedelta(days=days_back)
-        min_impressions = 50  # Minimum impressions threshold for ad groups
+        params: list = [start_date, campaign_id]
+        
+        if min_impressions > 0:
+            query += " HAVING COALESCE(SUM(agp.impressions), 0) >= %s"
+            params.append(min_impressions)
+        
+        query += " ORDER BY total_cost DESC"
         
         with self.get_connection() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                cursor.execute(query, (start_date, campaign_id, min_impressions))
+                cursor.execute(query, params)
                 return cursor.fetchall()
     
     def get_keywords_with_performance(self, ad_group_id: int, days_back: int = 7) -> List[Dict[str, Any]]:
@@ -948,22 +954,23 @@ class DatabaseConnector:
         
         try:
             import json as json_module
+            from psycopg2.extras import Json
             
-            # Ensure JSONB fields are properly formatted
-            if tracking_data.get('intelligence_signals') is not None:
-                if isinstance(tracking_data['intelligence_signals'], str):
-                    try:
-                        tracking_data['intelligence_signals'] = json_module.loads(tracking_data['intelligence_signals'])
-                    except (json_module.JSONDecodeError, ValueError):
-                        pass
-            if tracking_data.get('metadata') is not None:
-                if isinstance(tracking_data['metadata'], str):
-                    try:
-                        tracking_data['metadata'] = json_module.loads(tracking_data['metadata'])
-                    except (json_module.JSONDecodeError, ValueError):
-                        pass
-                elif not isinstance(tracking_data['metadata'], dict):
-                    tracking_data['metadata'] = json_module.loads(json_module.dumps(tracking_data['metadata']))
+            # Wrap JSONB fields with psycopg2.extras.Json so psycopg2 can adapt them
+            for jsonb_field in ('intelligence_signals', 'metadata'):
+                val = tracking_data.get(jsonb_field)
+                if val is not None:
+                    if isinstance(val, str):
+                        try:
+                            val = json_module.loads(val)
+                        except (json_module.JSONDecodeError, ValueError):
+                            val = {}
+                    if isinstance(val, (dict, list)):
+                        tracking_data[jsonb_field] = Json(val)
+                    else:
+                        tracking_data[jsonb_field] = Json({})
+                else:
+                    tracking_data[jsonb_field] = Json({})
             
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:

@@ -9,16 +9,12 @@ import {
   Filter,
   Lightbulb,
   TrendingUp,
-  TrendingDown,
   DollarSign,
   Target,
   Ban,
   Clock,
-  CheckCircle,
-  XCircle,
   AlertTriangle,
 } from 'lucide-react';
-import { DonutChart } from '@/components/Charts';
 import {
   fetchRecommendations,
   approveRecommendation,
@@ -82,7 +78,14 @@ export default function RecommendationsPage() {
     },
   });
 
-  const filteredRecs = recommendations?.filter((r) => {
+  // Ensure recommendations is always a flat array (handle both array and wrapped responses)
+  const recsArray: Recommendation[] = Array.isArray(recommendations)
+    ? recommendations
+    : Array.isArray((recommendations as any)?.data)
+      ? (recommendations as any).data
+      : [];
+
+  const filteredRecs = recsArray.filter((r) => {
     if (typeFilter !== 'all' && r.recommendation_type !== typeFilter) return false;
     if (priorityFilter !== 'all' && r.priority !== priorityFilter) return false;
     return true;
@@ -112,21 +115,22 @@ export default function RecommendationsPage() {
   };
 
   const selectAll = () => {
-    if (selectedRecs.size === filteredRecs?.length) {
+    if (selectedRecs.size === filteredRecs.length) {
       setSelectedRecs(new Set());
     } else {
-      setSelectedRecs(new Set(filteredRecs?.map((r) => r.id)));
+      setSelectedRecs(new Set(filteredRecs.map((r) => String(r.id))));
     }
   };
 
   // Group by priority for summary
-  const priorityCounts = recommendations?.reduce(
+  const priorityCounts = recsArray.reduce(
     (acc, r) => {
-      acc[r.priority] = (acc[r.priority] || 0) + 1;
+      const p = r.priority || 'low';
+      acc[p] = (acc[p] || 0) + 1;
       return acc;
     },
     {} as Record<string, number>
-  ) || {};
+  );
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -157,64 +161,66 @@ export default function RecommendationsPage() {
         </div>
       </div>
 
-      {/* Summary Cards + Priority Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-6 gap-4">
-        {/* Priority donut */}
-        <div className="card p-4 lg:col-span-2 flex items-center gap-4 hover-lift animate-fade-in-up">
-          <DonutChart
-            data={[
-              { name: 'Critical', value: priorityCounts.critical || 0, color: '#EF4444' },
-              { name: 'High', value: priorityCounts.high || 0, color: '#F97316' },
-              { name: 'Medium', value: priorityCounts.medium || 0, color: '#F59E0B' },
-              { name: 'Low', value: priorityCounts.low || 0, color: '#6B7280' },
-            ]}
-            height={120}
-            innerRadius={30}
-            outerRadius={50}
-            centerLabel="Total"
-            centerValue={String(recommendations?.length || 0)}
-          />
-          <div className="space-y-2">
-            {[
-              { label: 'Critical', count: priorityCounts.critical || 0, color: 'bg-red-500' },
-              { label: 'High', count: priorityCounts.high || 0, color: 'bg-orange-500' },
-              { label: 'Medium', count: priorityCounts.medium || 0, color: 'bg-amber-500' },
-              { label: 'Low', count: priorityCounts.low || 0, color: 'bg-gray-500' },
-            ].map(item => (
-              <div key={item.label} className="flex items-center gap-2 text-xs">
-                <div className={cn('w-2 h-2 rounded-full', item.color)} />
-                <span className="text-gray-600 dark:text-gray-400 w-12">{item.label}</span>
-                <span className="font-bold text-gray-900 dark:text-white tabular-nums">{item.count}</span>
-              </div>
-            ))}
+      {/* Summary Cards - Command Center style */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 stagger-animation">
+        {/* Total */}
+        <div className="metric-card" style={{ '--accent-color': '#FF9900' } as React.CSSProperties}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900 dark:text-white tabular-nums">{recsArray.length}</p>
+            </div>
+            <div className="p-3 rounded-lg" style={{ backgroundColor: '#FF990020' }}>
+              <Lightbulb className="w-5 h-5" style={{ color: '#FF9900' }} />
+            </div>
           </div>
         </div>
-
-        {/* Summary stats */}
-        <div className="lg:col-span-4 grid grid-cols-2 md:grid-cols-4 gap-4 stagger-animation">
-          <div className="card p-4 border-l-2 border-red-500 hover-lift">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Critical</p>
-            <p className="text-2xl font-bold text-red-600 dark:text-red-400 mt-1 tabular-nums">
-              {priorityCounts.critical || 0}
-            </p>
+        {/* Critical */}
+        <div className="metric-card" style={{ '--accent-color': '#EF4444' } as React.CSSProperties}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Critical</p>
+              <p className="mt-2 text-2xl font-bold text-red-600 dark:text-red-400 tabular-nums">{priorityCounts.critical || 0}</p>
+            </div>
+            <div className="p-3 rounded-lg" style={{ backgroundColor: '#EF444420' }}>
+              <AlertTriangle className="w-5 h-5" style={{ color: '#EF4444' }} />
+            </div>
           </div>
-          <div className="card p-4 border-l-2 border-orange-500 hover-lift">
-            <p className="text-sm text-gray-600 dark:text-gray-400">High</p>
-            <p className="text-2xl font-bold text-orange-600 dark:text-orange-400 mt-1 tabular-nums">
-              {priorityCounts.high || 0}
-            </p>
+        </div>
+        {/* High */}
+        <div className="metric-card" style={{ '--accent-color': '#F97316' } as React.CSSProperties}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">High</p>
+              <p className="mt-2 text-2xl font-bold text-orange-600 dark:text-orange-400 tabular-nums">{priorityCounts.high || 0}</p>
+            </div>
+            <div className="p-3 rounded-lg" style={{ backgroundColor: '#F9731620' }}>
+              <TrendingUp className="w-5 h-5" style={{ color: '#F97316' }} />
+            </div>
           </div>
-          <div className="card p-4 border-l-2 border-yellow-500 hover-lift">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Medium</p>
-            <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-500 mt-1 tabular-nums">
-              {priorityCounts.medium || 0}
-            </p>
+        </div>
+        {/* Medium */}
+        <div className="metric-card" style={{ '--accent-color': '#F59E0B' } as React.CSSProperties}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Medium</p>
+              <p className="mt-2 text-2xl font-bold text-yellow-600 dark:text-yellow-500 tabular-nums">{priorityCounts.medium || 0}</p>
+            </div>
+            <div className="p-3 rounded-lg" style={{ backgroundColor: '#F59E0B20' }}>
+              <Target className="w-5 h-5" style={{ color: '#F59E0B' }} />
+            </div>
           </div>
-          <div className="card p-4 border-l-2 border-gray-500 hover-lift">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Low</p>
-            <p className="text-2xl font-bold text-gray-600 dark:text-gray-400 mt-1 tabular-nums">
-              {priorityCounts.low || 0}
-            </p>
+        </div>
+        {/* Low */}
+        <div className="metric-card" style={{ '--accent-color': '#6B7280' } as React.CSSProperties}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Low</p>
+              <p className="mt-2 text-2xl font-bold text-gray-600 dark:text-gray-400 tabular-nums">{priorityCounts.low || 0}</p>
+            </div>
+            <div className="p-3 rounded-lg" style={{ backgroundColor: '#6B728020' }}>
+              <Clock className="w-5 h-5" style={{ color: '#6B7280' }} />
+            </div>
           </div>
         </div>
       </div>
@@ -249,11 +255,14 @@ export default function RecommendationsPage() {
             </select>
           </div>
           <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {filteredRecs.length} of {recsArray.length} recommendations
+            </span>
             <button
               onClick={selectAll}
               className="btn btn-ghost text-sm"
             >
-              {selectedRecs.size === filteredRecs?.length ? 'Deselect All' : 'Select All'}
+              {selectedRecs.size === filteredRecs.length && filteredRecs.length > 0 ? 'Deselect All' : 'Select All'}
             </button>
           </div>
         </div>
@@ -274,128 +283,138 @@ export default function RecommendationsPage() {
             </div>
           ))}
         </div>
-      ) : filteredRecs?.length === 0 ? (
+      ) : filteredRecs.length === 0 ? (
         <div className="card p-12 text-center">
           <Lightbulb className="w-12 h-12 text-gray-500 mx-auto mb-4" />
           <p className="text-gray-400">No recommendations available</p>
           <p className="text-sm text-gray-500 mt-1">
-            The AI engine hasn't found any optimization opportunities
+            {recsArray.length > 0
+              ? 'No recommendations match the current filters'
+              : "The AI engine hasn't found any optimization opportunities"}
           </p>
         </div>
       ) : (
-        <div className="space-y-4 stagger-animation">
-          {filteredRecs?.map((rec) => (
-            <div
-              key={rec.id}
-              className={cn(
-                'card p-4 transition-all hover:border-amazon-orange/30',
-                selectedRecs.has(rec.id) && 'border-amazon-orange bg-amazon-orange/5'
-              )}
-            >
-              <div className="flex items-start gap-4">
-                {/* Checkbox */}
-                <input
-                  type="checkbox"
-                  checked={selectedRecs.has(rec.id)}
-                  onChange={() => toggleSelect(rec.id)}
-                  className="mt-1 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
-                />
+        <div className="space-y-4">
+          {filteredRecs.map((rec, index) => {
+            const recId = String(rec.id ?? `rec-${index}`);
+            const adjPct = Number(rec.adjustment_percentage) || 0;
+            const confidence = Number(rec.confidence) || 0;
+            const currentVal = Number(rec.current_value) || 0;
+            const recommendedVal = Number(rec.recommended_value) || 0;
 
-                {/* Type Icon */}
-                <div className={cn(
-                  'p-2.5 rounded-lg',
-                  rec.priority === 'critical' ? 'bg-red-500/20 text-red-400' :
-                  rec.priority === 'high' ? 'bg-orange-500/20 text-orange-400' :
-                  rec.priority === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
-                  'bg-gray-500/20 text-gray-400'
-                )}>
-                  {getTypeIcon(rec.recommendation_type)}
-                </div>
+            return (
+              <div
+                key={recId}
+                className={cn(
+                  'card p-4 transition-all hover:border-amazon-orange/30 animate-fade-in',
+                  selectedRecs.has(recId) && 'border-amazon-orange bg-amazon-orange/5'
+                )}
+              >
+                <div className="flex items-start gap-4">
+                  {/* Checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={selectedRecs.has(recId)}
+                    onChange={() => toggleSelect(recId)}
+                    className="mt-1 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                  />
 
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={cn('badge', getPriorityBadge(rec.priority))}>
-                      {rec.priority}
-                    </span>
-                    <span className="badge badge-neutral">
-                      {rec.recommendation_type}
-                    </span>
+                  {/* Type Icon */}
+                  <div className={cn(
+                    'p-2.5 rounded-lg',
+                    rec.priority === 'critical' ? 'bg-red-500/20 text-red-400' :
+                    rec.priority === 'high' ? 'bg-orange-500/20 text-orange-400' :
+                    rec.priority === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
+                    'bg-gray-500/20 text-gray-400'
+                  )}>
+                    {getTypeIcon(rec.recommendation_type)}
                   </div>
-                  <h3 className="font-medium">
-                    <span
-                      className="entity-link"
-                      onClick={(e) => { e.stopPropagation(); }}
-                    >
-                      {rec.entity_name}
-                    </span>
-                  </h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    {rec.reason}
-                  </p>
 
-                  {/* Value Change */}
-                  <div className="flex items-center gap-4 mt-3">
-                    <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-500">Current</p>
-                      <p className="font-mono text-gray-900 dark:text-white">
-                        {formatCurrency(rec.current_value)}
-                      </p>
-                    </div>
-                    <div className="text-gray-500 dark:text-gray-400">→</div>
-                    <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-500">Suggested</p>
-                      <p className={cn(
-                        'font-mono font-medium',
-                        rec.adjustment_percentage > 0 ? 'text-green-400' : 'text-red-400'
-                      )}>
-                        {formatCurrency(rec.recommended_value)}
-                      </p>
-                    </div>
-                    <div className={cn(
-                      'badge',
-                      rec.adjustment_percentage > 0 ? 'badge-success' : 'badge-danger'
-                    )}>
-                      {rec.adjustment_percentage > 0 ? '+' : ''}
-                      {rec.adjustment_percentage.toFixed(1)}%
-                    </div>
-                    {rec.estimated_impact && (
-                      <span className="text-sm text-gray-400">
-                        Est. Impact: {rec.estimated_impact}
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={cn('badge', getPriorityBadge(rec.priority))}>
+                        {rec.priority}
                       </span>
-                    )}
+                      <span className="badge badge-neutral">
+                        {rec.recommendation_type}
+                      </span>
+                    </div>
+                    <h3 className="font-medium text-gray-900 dark:text-white">
+                      <span
+                        className="entity-link"
+                        onClick={(e) => { e.stopPropagation(); }}
+                      >
+                        {rec.entity_name || `${rec.entity_type} ${rec.entity_id}`}
+                      </span>
+                    </h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      {rec.reason || 'AI-suggested optimization'}
+                    </p>
+
+                    {/* Value Change */}
+                    <div className="flex items-center gap-4 mt-3">
+                      <div>
+                        <p className="text-xs text-gray-600 dark:text-gray-500">Current</p>
+                        <p className="font-mono text-gray-900 dark:text-white">
+                          {formatCurrency(currentVal)}
+                        </p>
+                      </div>
+                      <div className="text-gray-500 dark:text-gray-400">&rarr;</div>
+                      <div>
+                        <p className="text-xs text-gray-600 dark:text-gray-500">Suggested</p>
+                        <p className={cn(
+                          'font-mono font-medium',
+                          adjPct > 0 ? 'text-green-400' : 'text-red-400'
+                        )}>
+                          {formatCurrency(recommendedVal)}
+                        </p>
+                      </div>
+                      <div className={cn(
+                        'badge',
+                        adjPct > 0 ? 'badge-success' : 'badge-danger'
+                      )}>
+                        {adjPct > 0 ? '+' : ''}
+                        {adjPct.toFixed(1)}%
+                      </div>
+                      {rec.estimated_impact && (
+                        <span className="text-sm text-gray-400">
+                          Est. Impact: {rec.estimated_impact}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Confidence & Time */}
+                    <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
+                      <span>Confidence: {(confidence * 100).toFixed(0)}%</span>
+                      <span>{rec.created_at ? formatRelativeTime(rec.created_at) : 'Recently'}</span>
+                    </div>
                   </div>
 
-                  {/* Confidence & Time */}
-                  <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
-                    <span>Confidence: {(rec.confidence * 100).toFixed(0)}%</span>
-                    <span>{formatRelativeTime(rec.created_at)}</span>
+                  {/* Actions */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => approveMutation.mutate(recId)}
+                      disabled={approveMutation.isPending}
+                      className="btn btn-success"
+                      title="Approve"
+                    >
+                      <Check className="w-4 h-4" />
+                      Approve
+                    </button>
+                    <button
+                      onClick={() => rejectMutation.mutate(recId)}
+                      disabled={rejectMutation.isPending}
+                      className="btn btn-danger"
+                      title="Reject"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => approveMutation.mutate(rec.id)}
-                    disabled={approveMutation.isPending}
-                    className="btn btn-success"
-                    title="Approve"
-                  >
-                    <Check className="w-4 h-4" />
-                    Approve
-                  </button>
-                  <button
-                    onClick={() => rejectMutation.mutate(rec.id)}
-                    disabled={rejectMutation.isPending}
-                    className="btn btn-danger"
-                    title="Reject"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
