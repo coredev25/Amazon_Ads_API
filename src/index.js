@@ -46,14 +46,69 @@ app.post('/api/sync/full', async (req, res) => {
   }
 });
 
-// Sync campaigns only
+// Sync all campaigns (SP + SB + SD)
 app.post('/api/sync/campaigns', async (req, res) => {
   try {
-    logger.info('Campaign sync triggered via API');
+    logger.info('All campaigns sync triggered via API (SP + SB + SD)');
+    const results = { sp: 0, sb: 0, sd: 0 };
+    
+    // Sync Sponsored Products campaigns
+    results.sp = await syncService.syncCampaigns();
+    
+    // Sync Sponsored Brands campaigns
+    try {
+      results.sb = await syncService.syncSponsoredBrandsCampaigns();
+    } catch (error) {
+      logger.warn(`Sponsored Brands campaigns sync skipped: ${error.message}`);
+    }
+    
+    // Sync Sponsored Display campaigns
+    try {
+      results.sd = await syncService.syncSponsoredDisplayCampaigns();
+    } catch (error) {
+      logger.warn(`Sponsored Display campaigns sync skipped: ${error.message}`);
+    }
+    
+    const total = results.sp + results.sb + results.sd;
+    res.json({ status: 'success', recordsSynced: total, breakdown: results });
+  } catch (error) {
+    logger.error('Error syncing campaigns:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync Sponsored Products campaigns only
+app.post('/api/sync/sp-campaigns', async (req, res) => {
+  try {
+    logger.info('Sponsored Products campaign sync triggered via API');
     const count = await syncService.syncCampaigns();
     res.json({ status: 'success', recordsSynced: count });
   } catch (error) {
-    logger.error('Error syncing campaigns:', error);
+    logger.error('Error syncing SP campaigns:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync Sponsored Brands campaigns only
+app.post('/api/sync/sb-campaigns', async (req, res) => {
+  try {
+    logger.info('Sponsored Brands campaign sync triggered via API');
+    const count = await syncService.syncSponsoredBrandsCampaigns();
+    res.json({ status: 'success', recordsSynced: count });
+  } catch (error) {
+    logger.error('Error syncing SB campaigns:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync Sponsored Display campaigns only
+app.post('/api/sync/sd-campaigns', async (req, res) => {
+  try {
+    logger.info('Sponsored Display campaign sync triggered via API');
+    const count = await syncService.syncSponsoredDisplayCampaigns();
+    res.json({ status: 'success', recordsSynced: count });
+  } catch (error) {
+    logger.error('Error syncing SD campaigns:', error);
     res.status(500).json({ error: error.message });
   }
 });

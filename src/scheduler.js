@@ -33,7 +33,7 @@ class Scheduler {
   }
 
   /**
-   * Schedule hourly metadata sync (campaigns, ad groups, keywords only)
+   * Schedule hourly metadata sync (SP, SB, SD campaigns, ad groups, keywords)
    */
   scheduleHourlyMetadataSync() {
     const cronExpression = '0 * * * *'; // Every hour at minute 0
@@ -43,10 +43,26 @@ class Scheduler {
     const task = cron.schedule(cronExpression, async () => {
       logger.info('Running scheduled metadata sync...');
       try {
+        // Sync Sponsored Products campaigns
         await this.syncService.syncCampaigns();
+        
+        // Sync Sponsored Brands campaigns
+        try {
+          await this.syncService.syncSponsoredBrandsCampaigns();
+        } catch (error) {
+          logger.warn(`Sponsored Brands campaigns sync skipped: ${error.message}`);
+        }
+        
+        // Sync Sponsored Display campaigns
+        try {
+          await this.syncService.syncSponsoredDisplayCampaigns();
+        } catch (error) {
+          logger.warn(`Sponsored Display campaigns sync skipped: ${error.message}`);
+        }
+        
         await this.syncService.syncAdGroups();
         await this.syncService.syncKeywords();
-        logger.info('Scheduled metadata sync completed successfully');
+        logger.info('Scheduled metadata sync completed successfully (SP + SB + SD)');
       } catch (error) {
         logger.error('Scheduled metadata sync failed:', error);
       }

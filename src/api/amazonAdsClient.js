@@ -155,7 +155,9 @@ class AmazonAdsClient {
             const endpointLower = String(endpoint).toLowerCase();
             // Suggest a likely vendor-specific header based on endpoint path
             let suggestedHeader = "application/vnd.spcampaign.v3+json"; // default
-            if (endpointLower.includes('/sb/')) {
+            if (endpointLower.includes('/sb/v4/')) {
+              suggestedHeader = 'application/vnd.sbcampaign.v4+json';
+            } else if (endpointLower.includes('/sb/')) {
               suggestedHeader = 'application/vnd.sbcampaign.v3+json';
             } else if (endpointLower.includes('/sd/')) {
               suggestedHeader = 'application/vnd.sdcampaign.v3+json';
@@ -694,7 +696,8 @@ class AmazonAdsClient {
   }
 
   /**
-   * Get Sponsored Brands campaigns using v3 API (GET /sb/campaigns)
+   * Get Sponsored Brands campaigns using v4 API (POST /sb/v4/campaigns/list)
+   * Migrated from v3 GET /sb/campaigns per Amazon migration guide.
    * Supports filters:
    *  - stateFilter: string, array, or object { include: [] } (e.g., 'enabled,paused' or ['enabled','paused'])
    *  - campaignIdFilter: comma-separated string or array
@@ -703,57 +706,23 @@ class AmazonAdsClient {
    *  - startIndex: integer (pagination start)
    *  - count: integer (results per page, max: 100)
    *
-   * Note: This endpoint returns an array of campaign objects. For large accounts,
-   * use `getAllSBCampaigns` which will page through results using `startIndex`/`count`.
+   * Note: For large accounts, use `getAllSBCampaigns` which pages through results via nextToken.
    */
   async getSponsoredBrandsCampaigns(filters = {}) {
-    logger.info('Fetching Sponsored Brands campaigns (v3 API) via GET /sb/campaigns...');
+    logger.info('Fetching Sponsored Brands campaigns (v4 API) via POST /sb/v4/campaigns/list...');
 
-    // Build query params
-    const params = {};
-
-    // Normalize stateFilter (accept array, comma-separated string, or object { include: [] })
-    if (filters.stateFilter) {
-      if (typeof filters.stateFilter === 'object' && Array.isArray(filters.stateFilter.include)) {
-        params.stateFilter = filters.stateFilter.include.map(s => String(s).trim().toLowerCase()).join(',');
-      } else if (Array.isArray(filters.stateFilter)) {
-        params.stateFilter = filters.stateFilter.map(s => String(s).trim().toLowerCase()).join(',');
-      } else {
-        params.stateFilter = String(filters.stateFilter).trim().toLowerCase();
-      }
-    } else {
-      // Default: include all common states
-      params.stateFilter = 'enabled,paused,archived';
-    }
-
-    if (filters.campaignIdFilter) {
-      params.campaignIdFilter = Array.isArray(filters.campaignIdFilter) ? filters.campaignIdFilter.join(',') : filters.campaignIdFilter;
-    }
-
-    // Accept either `name` or `nameFilter` for backward compatibility
-    if (filters.name) {
-      params.name = filters.name;
-    } else if (filters.nameFilter) {
-      params.name = filters.nameFilter;
-    }
-
-    if (filters.portfolioIdFilter) {
-      params.portfolioIdFilter = Array.isArray(filters.portfolioIdFilter) ? filters.portfolioIdFilter.join(',') : filters.portfolioIdFilter;
-    }
-
-    if (Number.isInteger(filters.startIndex)) {
-      params.startIndex = filters.startIndex;
-    }
-    if (Number.isInteger(filters.count)) {
-      params.count = filters.count;
-    }
-
+    const requestBody = this._buildSBCampaignsListBody(filters);
     const customHeaders = {
-      'Accept': 'application/vnd.sbcampaign.v3+json'
+      'Content-Type': 'application/vnd.sbcampaign.v4+json',
+      'Accept': 'application/vnd.sbcampaign.v4+json'
     };
 
-    // Perform a simple GET request and return the array of campaigns
-    return await this.makeRequest('GET', '/sb/campaigns', null, params, 3, 100, customHeaders);
+    const response = await this.makeRequest('POST', '/sb/v4/campaigns/list', requestBody, null, 3, 100, customHeaders);
+
+    // v4 returns { campaigns: [], nextToken? } or array directly in some cases
+    if (Array.isArray(response)) return response;
+    if (response && Array.isArray(response.campaigns)) return response.campaigns;
+    return response || [];
   }
 
   /**
@@ -767,33 +736,74 @@ class AmazonAdsClient {
   }
 
   /**
-   * Convenience: Page through all SB campaigns using startIndex/count pagination
-   * (GET /sb/campaigns supports startIndex/count). This will accumulate results
-   * until fewer than `count` items are returned.
+   * Convenience: Page through all SB campaigns using v4 nextToken pagination.
+   * Accumulates results until no nextToken is returned.
    */
   async getAllSBCampaigns(filters = {}) {
     const allCampaigns = [];
-    let startIndex = Number.isInteger(filters.startIndex) ? filters.startIndex : 0;
-    const count = Number.isInteger(filters.count) ? filters.count : 100; // max 100
-    let hasMore = true;
+    let nextToken = null;
+    const count = Number.isInteger(filters.count) ? filters.count : 100;
 
-    while (hasMore) {
-      const pageFilters = { ...filters, startIndex, count };
-      const campaigns = await this.getSponsoredBrandsCampaigns(pageFilters);
-      if (!Array.isArray(campaigns)) break;
+    do {
+      const pageFilters = { ...filters, count, nextToken };
+      const response = await this.makeRequest('POST', '/sb/v4/campaigns/list', this._buildSBCampaignsListBody(pageFilters), null, 3, 100, {
+        'Content-Type': 'application/vnd.sbcampaign.v4+json',
+        'Accept': 'application/vnd.sbcampaign.v4+json'
+      });
 
+      const campaigns = Array.isArray(response.campaigns) ? response.campaigns : (Array.isArray(response) ? response : []);
       allCampaigns.push(...campaigns);
+      nextToken = response.nextToken || null;
 
-      if (campaigns.length < count) {
-        hasMore = false;
-      } else {
-        startIndex += count;
+      if (campaigns.length > 0) {
+        logger.info(`Fetched ${allCampaigns.length} Sponsored Brands campaigns so far...`);
       }
-
-      logger.info(`Fetched ${allCampaigns.length} Sponsored Brands campaigns so far...`);
-    }
+    } while (nextToken);
 
     return allCampaigns;
+  }
+
+  /**
+   * Build request body for POST /sb/v4/campaigns/list
+   * Amazon Ads API v4 expects optional fields to be omitted (not empty string) when not used.
+   * stateFilter should be an array for v4; optional filters must have truthy values.
+   * @private
+   */
+  _buildSBCampaignsListBody(filters = {}) {
+    const body = { maxResults: Number.isInteger(filters.count) ? Math.min(100, Math.max(10, filters.count)) : 100 };
+
+    // v4 API expects stateFilter as array of CampaignState enum values, not comma-separated string
+    let stateArray = ['enabled', 'paused', 'archived'];
+    if (filters.stateFilter) {
+      if (typeof filters.stateFilter === 'object' && Array.isArray(filters.stateFilter.include)) {
+        stateArray = filters.stateFilter.include.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+      } else if (Array.isArray(filters.stateFilter)) {
+        stateArray = filters.stateFilter.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+      } else {
+        const str = String(filters.stateFilter).trim().toLowerCase();
+        stateArray = str ? str.split(/[,\s]+/).filter(Boolean) : stateArray;
+      }
+    }
+    if (stateArray.length > 0) {
+      body.stateFilter = stateArray;
+    }
+
+    // Only include optional filters when they have non-empty values (avoids "Expected null" error)
+    const campaignIdVal = Array.isArray(filters.campaignIdFilter) ? filters.campaignIdFilter.join(',') : (filters.campaignIdFilter || '');
+    if (campaignIdVal.trim()) {
+      body.campaignIdFilter = campaignIdVal.trim();
+    }
+    const nameVal = (filters.name || filters.nameFilter || '').trim();
+    if (nameVal) body.name = nameVal;
+    const portfolioVal = Array.isArray(filters.portfolioIdFilter) ? filters.portfolioIdFilter.join(',') : (filters.portfolioIdFilter || '');
+    if (portfolioVal.trim()) {
+      body.portfolioIdFilter = portfolioVal.trim();
+    }
+    if (Number.isInteger(filters.startIndex)) body.startIndex = filters.startIndex;
+    const nextTokenVal = filters.nextToken && String(filters.nextToken).trim();
+    if (nextTokenVal) body.nextToken = nextTokenVal;
+
+    return body;
   }
 
   /**

@@ -900,12 +900,12 @@ class DataSyncService {
   }
 
   /**
-   * Sync Sponsored Brands campaigns using v3 API
+   * Sync Sponsored Brands campaigns using v4 API (POST /sb/v4/campaigns/list)
    */
   async syncSponsoredBrandsCampaigns() {
     try {
-      logger.info('📋 Syncing Sponsored Brands campaigns from Amazon Ads API v3...');
-      const campaigns = await this.client.getSponsoredBrandsCampaigns();
+      logger.info('📋 Syncing Sponsored Brands campaigns from Amazon Ads API v4...');
+      const campaigns = await this.client.getAllSBCampaigns();
 
       if (!campaigns || campaigns.length === 0) {
         logger.warn('⚠️  No Sponsored Brands campaigns returned from API');
@@ -994,7 +994,7 @@ class DataSyncService {
   async syncSponsoredDisplayCampaigns() {
     try {
       logger.info('📋 Syncing Sponsored Display campaigns from Amazon Ads API v3...');
-      const campaigns = await this.client.getSponsoredDisplayCampaigns();
+      const campaigns = await this.client.getAllSponsoredDisplayCampaigns();
 
       if (!campaigns || campaigns.length === 0) {
         logger.warn('⚠️  No Sponsored Display campaigns returned from API');
