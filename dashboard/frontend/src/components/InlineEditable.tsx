@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Check, X } from 'lucide-react';
 import { cn } from '@/utils/helpers';
+import { updateBidInline, updateBudgetInline } from '@/utils/api';
 
 interface InlineEditableCellProps {
   value: string | number;
@@ -159,21 +160,9 @@ interface InlineEditableBidProps {
 export function InlineEditableBid({ keywordId, currentBid, onBidSaved }: InlineEditableBidProps) {
   const handleSaveBid = async (newBid: number | string) => {
     try {
-      const response = await fetch('/api/inline-edit/bid', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          keyword_id: keywordId,
-          new_bid: parseFloat(String(newBid))
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        onBidSaved?.(data.new_bid);
-        return true;
-      }
-      return false;
+      const data = await updateBidInline(keywordId, parseFloat(String(newBid)));
+      onBidSaved?.(data.new_bid);
+      return true;
     } catch (error) {
       console.error('Error updating bid:', error);
       return false;
@@ -200,21 +189,9 @@ interface InlineEditableBudgetProps {
 export function InlineEditableBudget({ campaignId, currentBudget, onBudgetSaved }: InlineEditableBudgetProps) {
   const handleSaveBudget = async (newBudget: number | string) => {
     try {
-      const response = await fetch('/api/inline-edit/budget', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          campaign_id: campaignId,
-          new_budget: parseFloat(String(newBudget))
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        onBudgetSaved?.(data.new_budget);
-        return true;
-      }
-      return false;
+      const data = await updateBudgetInline(campaignId, parseFloat(String(newBudget)));
+      onBudgetSaved?.(data.new_budget);
+      return true;
     } catch (error) {
       console.error('Error updating budget:', error);
       return false;

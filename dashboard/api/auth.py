@@ -83,19 +83,36 @@ class PasswordChange(BaseModel):
 def get_db():
     """Database dependency"""
     # Import here to avoid circular imports
+    # Check both 'dashboard.api.main' and '__main__' modules to handle
+    # the case where the server is run directly via 'python dashboard/api/main.py'
+    # (module name is __main__) vs 'uvicorn dashboard.api.main:app' (module name is dashboard.api.main)
+    import sys
+    
+    db_connector = None
+    
+    # Try the standard module path first
     try:
-        from dashboard.api.main import db_connector
-        if db_connector is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database connection not available"
-            )
-        return db_connector
+        from dashboard.api.main import db_connector as _db
+        db_connector = _db
     except (ImportError, AttributeError):
+        pass
+    
+    # If not found, check __main__ module (when run directly with python)
+    if db_connector is None:
+        try:
+            main_module = sys.modules.get('__main__')
+            if main_module and hasattr(main_module, 'db_connector'):
+                db_connector = main_module.db_connector
+        except (AttributeError, TypeError):
+            pass
+    
+    if db_connector is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database connection not available"
         )
+    
+    return db_connector
 
 # ============================================================================
 # HELPER FUNCTIONS

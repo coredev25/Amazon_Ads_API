@@ -5649,14 +5649,24 @@ async def create_event_annotation(
 # INLINE EDITING ENDPOINTS
 # ============================================================================
 
+class InlineBidRequest(BaseModel):
+    keyword_id: str
+    new_bid: float
+
+class InlineBudgetRequest(BaseModel):
+    campaign_id: str
+    new_budget: float
+
 @app.post("/api/inline-edit/bid")
 async def inline_edit_bid(
-    keyword_id: str,
-    new_bid: float,
+    request: InlineBidRequest,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """Real-time bid update from inline editing"""
     try:
+        keyword_id = request.keyword_id
+        new_bid = request.new_bid
+
         if current_user.role not in ['admin', 'manager', 'specialist']:
             raise HTTPException(status_code=403, detail="Permission denied")
         
@@ -5727,12 +5737,14 @@ async def inline_edit_bid(
 
 @app.post("/api/inline-edit/budget")
 async def inline_edit_budget(
-    campaign_id: str,
-    new_budget: float,
+    request: InlineBudgetRequest,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """Real-time budget update from inline editing"""
     try:
+        campaign_id = request.campaign_id
+        new_budget = request.new_budget
+
         if current_user.role not in ['admin', 'manager']:
             raise HTTPException(status_code=403, detail="Permission denied")
         
