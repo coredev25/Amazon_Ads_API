@@ -87,6 +87,14 @@ export interface Alert {
   created_at: string;
 }
 
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
 export interface Campaign extends Record<string, unknown> {
   campaign_id: number;
   campaign_name: string;
@@ -576,8 +584,8 @@ export const fetchAlerts = async (limit: number = 10): Promise<Alert[]> => {
 // API FUNCTIONS - CAMPAIGNS
 // ============================================================================
 
-export const fetchCampaigns = async (days: number = 7, portfolioId?: number): Promise<Campaign[]> => {
-  const params = new URLSearchParams({ days: days.toString() });
+export const fetchCampaigns = async (days: number = 7, portfolioId?: number, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<Campaign>> => {
+  const params = new URLSearchParams({ days: days.toString(), page: page.toString(), page_size: pageSize.toString() });
   if (portfolioId !== undefined) params.append('portfolio_id', portfolioId.toString());
   const response = await api.get(`/api/campaigns?${params.toString()}`);
   return response.data;
@@ -611,16 +619,16 @@ export const bulkAddCampaignsToPortfolio = async (campaignIds: number[], portfol
 };
 
 // Ad Groups
-export const fetchAdGroups = async (campaignId?: number, days: number = 7): Promise<AdGroup[]> => {
-  const params = new URLSearchParams({ days: days.toString() });
+export const fetchAdGroups = async (campaignId?: number, days: number = 7, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<AdGroup>> => {
+  const params = new URLSearchParams({ days: days.toString(), page: page.toString(), page_size: pageSize.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   const response = await api.get(`/api/ad-groups?${params.toString()}`);
   return response.data;
 };
 
 // Ads (Product Ads/Creatives)
-export const fetchAds = async (campaignId?: number, adGroupId?: number, days: number = 7): Promise<any[]> => {
-  const params = new URLSearchParams({ days: days.toString() });
+export const fetchAds = async (campaignId?: number, adGroupId?: number, days: number = 7, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<any>> => {
+  const params = new URLSearchParams({ days: days.toString(), page: page.toString(), page_size: pageSize.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
   const response = await api.get(`/api/ads?${params.toString()}`);
@@ -632,15 +640,17 @@ export const fetchProductTargeting = async (campaignId?: number, adGroupId?: num
   const params = new URLSearchParams({ days: days.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
-  const response = await api.get(`/api/targeting?${params.toString()}`);
+  const response = await api.get(`/api/product-targeting?${params.toString()}`);
   return response.data;
 };
 
 // Search Terms
-export const fetchSearchTerms = async (campaignId?: number, adGroupId?: number, days: number = 7, minClicks: number = 0): Promise<SearchTerm[]> => {
+export const fetchSearchTerms = async (campaignId?: number, adGroupId?: number, days: number = 7, minClicks: number = 0, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<SearchTerm>> => {
   const params = new URLSearchParams({ 
     days: days.toString(), 
-    min_clicks: minClicks.toString() 
+    min_clicks: minClicks.toString(),
+    page: page.toString(),
+    page_size: pageSize.toString(),
   });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
@@ -847,8 +857,6 @@ export const fetchEventAnnotations = async (
   startDate?: Date,
   endDate?: Date
 ): Promise<EventAnnotation[]> => {
-  // For now, return empty array - this can be connected to an API endpoint later
-  // The API endpoint could query bid_change_history and other event tables
   try {
     const params = new URLSearchParams();
     if (startDate && endDate) {
@@ -858,11 +866,8 @@ export const fetchEventAnnotations = async (
       params.append('days', days.toString());
     }
     
-    // TODO: Replace with actual API endpoint when available
-    // const response = await api.get(`/api/events/annotations?${params.toString()}`);
-    // return response.data;
-    
-    return [];
+    const response = await api.get(`/api/events/annotations?${params.toString()}`);
+    return response.data;
   } catch (error) {
     console.error('Error fetching event annotations:', error);
     return [];
@@ -892,12 +897,16 @@ export const fetchKeywords = async (params: {
   ad_group_id?: number;
   days?: number;
   limit?: number;
-}): Promise<Keyword[]> => {
+  page?: number;
+  page_size?: number;
+}): Promise<PaginatedResponse<Keyword>> => {
   const queryParams = new URLSearchParams();
   if (params.campaign_id) queryParams.append('campaign_id', params.campaign_id.toString());
   if (params.ad_group_id) queryParams.append('ad_group_id', params.ad_group_id.toString());
   if (params.days) queryParams.append('days', params.days.toString());
   if (params.limit) queryParams.append('limit', params.limit.toString());
+  queryParams.append('page', (params.page || 1).toString());
+  queryParams.append('page_size', (params.page_size || 50).toString());
   
   const response = await api.get(`/api/keywords?${queryParams.toString()}`);
   return response.data;
@@ -909,13 +918,17 @@ export const fetchProductTargets = async (params: {
   targeting_type?: 'asin' | 'category' | 'brand';
   days?: number;
   limit?: number;
-}): Promise<ProductTarget[]> => {
+  page?: number;
+  page_size?: number;
+}): Promise<PaginatedResponse<ProductTarget>> => {
   const queryParams = new URLSearchParams();
   if (params.campaign_id) queryParams.append('campaign_id', params.campaign_id.toString());
   if (params.ad_group_id) queryParams.append('ad_group_id', params.ad_group_id.toString());
   if (params.targeting_type) queryParams.append('targeting_type', params.targeting_type);
   if (params.days) queryParams.append('days', params.days.toString());
   if (params.limit) queryParams.append('limit', params.limit.toString());
+  queryParams.append('page', (params.page ?? 1).toString());
+  queryParams.append('page_size', (params.page_size ?? 50).toString());
   
   const response = await api.get(`/api/product-targeting?${queryParams.toString()}`);
   return response.data;

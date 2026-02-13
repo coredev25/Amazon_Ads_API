@@ -95,77 +95,34 @@ else
 fi
 echo ""
 
-# Step 2: Setup AI settings schema
+# Step 2: Migrate AI settings config to database
 echo "=========================================="
-echo "Step 2: Setting up AI settings schema"
+echo "Step 2: Setting up AI settings in database"
 echo "=========================================="
-if [ -f "src/database/ai_settings_schema.sql" ]; then
-    echo "Running AI settings schema setup..."
-    python3 scripts/setup_ai_database_config.py --config config/ai_rule_engine.json || {
-        echo "⚠️  Warning: AI settings setup had issues, but continuing..."
-    }
-    echo "✓ AI settings schema created"
-else
-    echo "⚠️  Warning: src/database/ai_settings_schema.sql not found, skipping..."
-fi
+# AI settings tables are included in the consolidated schema.sql (Step 1).
+# This step migrates config values from JSON to the database.
+echo "Migrating AI configuration to database..."
+python3 scripts/setup_ai_database_config.py --config config/ai_rule_engine.json || {
+    echo "⚠️  Warning: AI settings migration had issues, but continuing..."
+}
 echo ""
 
-# Step 3: Setup dashboard auth schema
+# Step 3: Verify dashboard auth schema (included in consolidated schema.sql)
 echo "=========================================="
-echo "Step 3: Setting up dashboard auth schema"
+echo "Step 3: Verifying dashboard auth schema"
 echo "=========================================="
-if [ -f "dashboard/auth_schema.sql" ]; then
-    echo "Running dashboard auth schema setup..."
-    if command -v psql &> /dev/null; then
-        export PGPASSWORD="$DB_PASSWORD"
-        psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" -f dashboard/auth_schema.sql
-        echo "✓ Dashboard auth schema created"
-    else
-        python3 -c "
-from src.ai_rule_engine.database import DatabaseConnector
-import sys
-db = DatabaseConnector()
-with open('dashboard/auth_schema.sql', 'r') as f:
-    schema = f.read()
-with db.get_connection() as conn:
-    with conn.cursor() as cursor:
-        cursor.execute(schema)
-        conn.commit()
-print('✓ Dashboard auth schema created')
-"
-    fi
-else
-    echo "⚠️  Warning: dashboard/auth_schema.sql not found, skipping..."
-fi
+# Auth tables (users, sessions, password_reset_tokens) are included
+# in the consolidated schema.sql applied in Step 1.
+echo "✓ Dashboard auth schema included in consolidated schema (Step 1)"
 echo ""
 
-# Step 4: Setup dashboard schema additions
+# Step 4: Verify dashboard schema additions (included in consolidated schema.sql)
 echo "=========================================="
-echo "Step 4: Setting up dashboard schema additions"
+echo "Step 4: Verifying dashboard schema additions"
 echo "=========================================="
-if [ -f "dashboard/schema_additions.sql" ]; then
-    echo "Running dashboard schema additions..."
-    if command -v psql &> /dev/null; then
-        export PGPASSWORD="$DB_PASSWORD"
-        psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" -f dashboard/schema_additions.sql
-        echo "✓ Dashboard schema additions created"
-    else
-        python3 -c "
-from src.ai_rule_engine.database import DatabaseConnector
-import sys
-db = DatabaseConnector()
-with open('dashboard/schema_additions.sql', 'r') as f:
-    schema = f.read()
-with db.get_connection() as conn:
-    with conn.cursor() as cursor:
-        cursor.execute(schema)
-        conn.commit()
-print('✓ Dashboard schema additions created')
-"
-    fi
-else
-    echo "⚠️  Warning: dashboard/schema_additions.sql not found, skipping..."
-fi
+# Dashboard tables (dashboard_user_preferences, dashboard_saved_views, etc.)
+# are included in the consolidated schema.sql applied in Step 1.
+echo "✓ Dashboard schema additions included in consolidated schema (Step 1)"
 echo ""
 
 # Step 5: Setup re-entry control tables

@@ -900,7 +900,7 @@ class DataSyncService {
   }
 
   /**
-   * Sync Sponsored Brands campaigns using v4 API (POST /sb/v4/campaigns/list)
+   * Sync Sponsored Brands campaigns using v4 API (GET /sb/v4/campaigns)
    */
   async syncSponsoredBrandsCampaigns() {
     try {

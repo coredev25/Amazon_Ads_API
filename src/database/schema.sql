@@ -1072,6 +1072,52 @@ DROP TRIGGER IF EXISTS update_amazon_accounts_updated_at ON amazon_accounts;
 CREATE TRIGGER update_amazon_accounts_updated_at BEFORE UPDATE ON amazon_accounts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+CREATE OR REPLACE VIEW recent_bid_changes_summary AS
+SELECT
+    entity_type,
+    entity_id,
+    entity_name,
+    COUNT(*) AS total_changes,
+    MIN(change_date) AS first_change_date,
+    MAX(change_date) AS last_change_date,
+    ROUND(AVG(change_percentage)::numeric, 2) AS avg_change_pct,
+    ROUND(SUM(change_amount)::numeric, 2) AS total_change_amount,
+    ROUND(AVG(acos_at_change)::numeric, 4) AS avg_acos,
+    ROUND(AVG(roas_at_change)::numeric, 4) AS avg_roas,
+    SUM(CASE WHEN change_amount > 0 THEN 1 ELSE 0 END) AS increases,
+    SUM(CASE WHEN change_amount < 0 THEN 1 ELSE 0 END) AS decreases,
+    ROUND(MIN(new_bid)::numeric, 2) AS min_bid,
+    ROUND(MAX(new_bid)::numeric, 2) AS max_bid,
+    ROUND((MAX(new_bid) - MIN(new_bid))::numeric, 2) AS bid_range
+FROM bid_change_history
+WHERE change_date >= NOW() - INTERVAL '30 days'
+GROUP BY entity_type, entity_id, entity_name;
+
+-- View: Bid oscillation detection summary (entities with potential oscillation)
+CREATE OR REPLACE VIEW bid_oscillation_detection_view AS
+SELECT
+    bod.entity_type,
+    bod.entity_id,
+    bod.entity_name,
+    bod.direction_changes,
+    bod.is_oscillating,
+    bod.detection_window_days,
+    bod.last_change_date,
+    bal.locked_until,
+    bal.lock_reason,
+    CASE
+        WHEN bal.locked_until IS NOT NULL AND bal.locked_until > NOW()
+        THEN TRUE ELSE FALSE
+    END AS is_locked,
+    CASE
+        WHEN bal.locked_until IS NOT NULL AND bal.locked_until > NOW()
+        THEN EXTRACT(EPOCH FROM (bal.locked_until - NOW())) / 3600
+        ELSE 0
+    END AS hours_until_unlock
+FROM bid_oscillation_detection bod
+LEFT JOIN bid_adjustment_locks bal
+    ON bod.entity_type = bal.entity_type AND bod.entity_id = bal.entity_id;
+
 -- ============================================================================
 -- DEFAULT DATA
 -- ============================================================================

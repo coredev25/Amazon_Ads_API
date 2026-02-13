@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import {
   History,
   Filter,
@@ -30,6 +31,7 @@ import {
 } from '@/utils/helpers';
 
 export default function ChangeLogPage() {
+  const toast = useToast();
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>('all');
   const [dateRange, setDateRange] = useState<DateRange>({
     type: 'last_7_days',
@@ -59,7 +61,11 @@ export default function ChangeLogPage() {
   const revertMutation = useMutation({
     mutationFn: revertChange,
     onSuccess: () => {
+      toast.success('Change Reverted', 'The change has been successfully reverted');
       queryClient.invalidateQueries({ queryKey: ['changelog'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Revert Failed', error.message);
     },
   });
 
@@ -138,46 +144,46 @@ export default function ChangeLogPage() {
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="card p-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 stagger-animation">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-400">Total Changes</p>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
+          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1 tabular-nums">
             {changelog?.length || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-amazon-orange" />
             <p className="text-sm text-gray-400">AI Changes</p>
           </div>
-          <p className="text-2xl font-bold text-amazon-orange mt-1">
+          <p className="text-2xl font-bold text-amazon-orange mt-1 tabular-nums">
             {changelog?.filter((c) => c.triggered_by.includes('ai')).length || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-2">
             <CheckCircle className="w-4 h-4 text-green-400" />
             <p className="text-sm text-gray-400">Successful</p>
           </div>
-          <p className="text-2xl font-bold text-green-400 mt-1">
+          <p className="text-2xl font-bold text-green-400 mt-1 tabular-nums">
             {outcomeStats['success'] || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-2">
             <XCircle className="w-4 h-4 text-red-400" />
             <p className="text-sm text-gray-400">Failed</p>
           </div>
-          <p className="text-2xl font-bold text-red-400 mt-1">
+          <p className="text-2xl font-bold text-red-400 mt-1 tabular-nums">
             {outcomeStats['failure'] || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-2">
             <Brain className="w-4 h-4 text-purple-400" />
             <p className="text-sm text-gray-400">Success Rate</p>
           </div>
-          <p className="text-2xl font-bold text-purple-400 mt-1">
+          <p className="text-2xl font-bold text-purple-400 mt-1 tabular-nums">
             {learningStats ? `${learningStats.success_rate.toFixed(1)}%` : 'N/A'}
           </p>
         </div>
@@ -319,8 +325,8 @@ export default function ChangeLogPage() {
                               </span>
                             )}
                           </div>
-                          <h3 className="font-medium text-gray-900 dark:text-white">
-                            {entry.entity_name}
+                          <h3 className="font-medium">
+                            <span className="entity-link">{entry.entity_name}</span>
                           </h3>
                           <p className="text-sm text-gray-400 mt-1">
                             {entry.reason}

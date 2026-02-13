@@ -4,10 +4,12 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Check, X, Edit2, Save, Columns, Filter, 
   Play, Pause, Archive, TrendingUp, TrendingDown, DollarSign,
-  Percent, Package, Target, ChevronDown, XCircle, ChevronUp, ChevronsUpDown
+  Percent, Package, Target, ChevronDown, XCircle, ChevronUp, ChevronsUpDown,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 import { Sparkline } from './Charts';
 import { cn, formatCurrency, formatAcos } from '@/utils/helpers';
+import { useToast } from '@/contexts/ToastContext';
 
 interface Column<T> {
   key: keyof T | string;
@@ -58,6 +60,15 @@ interface SmartGridProps<T extends Record<string, unknown>> {
     order: string[];
     widths: Record<string, number>;
   }) => Promise<void>;
+  // Server-side pagination
+  pagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (pageSize: number) => void;
 }
 
 export default function SmartGrid<T extends Record<string, unknown>>({
@@ -87,7 +98,11 @@ export default function SmartGrid<T extends Record<string, unknown>>({
     { value: 'out_of_budget', label: 'Out of Budget' },
   ],
   onSaveColumnLayout,
+  pagination,
+  onPageChange,
+  onPageSizeChange,
 }: SmartGridProps<T>) {
+  const gridToast = useToast();
   const [editingCell, setEditingCell] = useState<{ rowId: string | number; column: string } | null>(null);
   const [editValue, setEditValue] = useState<any>('');
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
@@ -108,6 +123,40 @@ export default function SmartGrid<T extends Record<string, unknown>>({
     onConfirm?: () => void;
   } | null>(null);
   const [bulkActionInProgress, setBulkActionInProgress] = useState(false);
+  const [promptDialog, setPromptDialog] = useState<{
+    title: string;
+    label: string;
+    placeholder: string;
+    defaultValue: string;
+    inputType?: string;
+    options?: { value: string; label: string }[];
+    onSubmit: (value: string) => void;
+  } | null>(null);
+  const [promptValue, setPromptValue] = useState('');
+  const promptInputRef = useRef<HTMLInputElement>(null);
+
+  const openPromptDialog = (opts: {
+    title: string;
+    label: string;
+    placeholder?: string;
+    defaultValue?: string;
+    inputType?: string;
+    options?: { value: string; label: string }[];
+    onSubmit: (value: string) => void;
+  }) => {
+    const val = opts.defaultValue || '';
+    setPromptValue(val);
+    setPromptDialog({
+      title: opts.title,
+      label: opts.label,
+      placeholder: opts.placeholder || '',
+      defaultValue: val,
+      inputType: opts.inputType,
+      options: opts.options,
+      onSubmit: opts.onSubmit,
+    });
+    setTimeout(() => promptInputRef.current?.focus(), 50);
+  };
 
   const inputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -379,17 +428,24 @@ export default function SmartGrid<T extends Record<string, unknown>>({
     .map(key => columns.find(c => String(c.key) === key))
     .filter((col): col is Column<T> => col !== undefined && columnVisibility[String(col.key)] !== false);
 
+  // Normalize selectedRows to strings for consistent comparison
+  // This fixes the type mismatch where parent passes number IDs but SmartGrid uses String(row[keyField])
+  const normalizedSelectedRows = useMemo(
+    () => new Set(Array.from(selectedRows).map(String)),
+    [selectedRows]
+  );
+
   // Calculate selection state based on filtered/sorted data
   const selectableRowIds = new Set(sortedData.map(row => String(row[keyField])));
-  const selectedCount = Array.from(selectedRows).filter(id => selectableRowIds.has(String(id))).length;
+  const selectedCount = Array.from(normalizedSelectedRows).filter(id => selectableRowIds.has(id)).length;
   const allSelected = sortedData.length > 0 && selectedCount === sortedData.length && selectedCount > 0;
   const someSelected = selectedCount > 0 && selectedCount < sortedData.length;
 
   // Bulk action handlers
   const handleBulkAction = async (action: string, params?: any) => {
-    if (!onBulkAction || selectedRows.size === 0) return;
+    if (!onBulkAction || normalizedSelectedRows.size === 0) return;
     
-    const selectedIds = Array.from(selectedRows);
+    const selectedIds = Array.from(normalizedSelectedRows);
     const actionDescriptions: Record<string, string> = {
       pause: 'Pause selected items',
       enable: 'Enable selected items',
@@ -426,7 +482,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
           setBulkActionConfirmation(null);
         } catch (error) {
           console.error('Bulk action failed:', error);
-          alert(`Failed to ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          gridToast.error('Bulk Action Failed', `Failed to ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         } finally {
           setBulkActionInProgress(false);
         }
@@ -504,12 +560,12 @@ export default function SmartGrid<T extends Record<string, unknown>>({
       )}
 
       {/* Floating Action Bar */}
-      {enableSelection && selectedRows.size > 0 && (
+      {enableSelection && normalizedSelectedRows.size > 0 && (
         <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50">
           <div className="card p-4 shadow-2xl border-2 border-amazon-orange/20 bg-white dark:bg-gray-800">
             <div className="flex items-center gap-4">
               <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                {selectedRows.size} selected
+                {normalizedSelectedRows.size} selected
               </span>
               <div className="flex items-center gap-2 border-l border-gray-200 dark:border-gray-700 pl-4">
                 <button
@@ -547,10 +603,15 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                       <div className="space-y-2">
                         <button
                           onClick={() => {
-                            const percent = prompt('Increase by percentage:', '10');
-                            if (percent) {
-                              handleBulkAction('adjust_bids', { type: 'increase', percent: parseFloat(percent) });
-                            }
+                            setShowBulkActionMenu(false);
+                            openPromptDialog({
+                              title: 'Increase Bids',
+                              label: 'Increase by percentage (%)',
+                              placeholder: '10',
+                              defaultValue: '10',
+                              inputType: 'number',
+                              onSubmit: (val) => handleBulkAction('adjust_bids', { type: 'increase', percent: parseFloat(val) }),
+                            });
                           }}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded flex items-center gap-2"
                         >
@@ -559,10 +620,15 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                         </button>
                         <button
                           onClick={() => {
-                            const percent = prompt('Decrease by percentage:', '10');
-                            if (percent) {
-                              handleBulkAction('adjust_bids', { type: 'decrease', percent: parseFloat(percent) });
-                            }
+                            setShowBulkActionMenu(false);
+                            openPromptDialog({
+                              title: 'Decrease Bids',
+                              label: 'Decrease by percentage (%)',
+                              placeholder: '10',
+                              defaultValue: '10',
+                              inputType: 'number',
+                              onSubmit: (val) => handleBulkAction('adjust_bids', { type: 'decrease', percent: parseFloat(val) }),
+                            });
                           }}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded flex items-center gap-2"
                         >
@@ -571,10 +637,15 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                         </button>
                         <button
                           onClick={() => {
-                            const amount = prompt('Set bid to:', '');
-                            if (amount) {
-                              handleBulkAction('adjust_bids', { type: 'set', amount: parseFloat(amount) });
-                            }
+                            setShowBulkActionMenu(false);
+                            openPromptDialog({
+                              title: 'Set Bid',
+                              label: 'Set bid amount ($)',
+                              placeholder: '0.75',
+                              defaultValue: '',
+                              inputType: 'number',
+                              onSubmit: (val) => handleBulkAction('adjust_bids', { type: 'set', amount: parseFloat(val) }),
+                            });
                           }}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded flex items-center gap-2"
                         >
@@ -587,10 +658,14 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                 </div>
                 <button
                   onClick={() => {
-                    const amount = prompt('Adjust budgets by amount:', '');
-                    if (amount) {
-                      handleBulkAction('adjust_budgets', { amount: parseFloat(amount) });
-                    }
+                    openPromptDialog({
+                      title: 'Adjust Budgets',
+                      label: 'Adjust daily budgets by amount ($)',
+                      placeholder: '5.00',
+                      defaultValue: '',
+                      inputType: 'number',
+                      onSubmit: (val) => handleBulkAction('adjust_budgets', { amount: parseFloat(val) }),
+                    });
                   }}
                   className="btn btn-sm btn-secondary flex items-center gap-1"
                 >
@@ -599,10 +674,14 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                 </button>
                 <button
                   onClick={() => {
-                    const portfolioId = prompt('Portfolio ID:', '');
-                    if (portfolioId) {
-                      handleBulkAction('move_to_portfolio', { portfolioId: parseInt(portfolioId) });
-                    }
+                    openPromptDialog({
+                      title: 'Move to Portfolio',
+                      label: 'Enter Portfolio ID',
+                      placeholder: 'e.g. 12345',
+                      defaultValue: '',
+                      inputType: 'number',
+                      onSubmit: (val) => handleBulkAction('move_to_portfolio', { portfolioId: parseInt(val) }),
+                    });
                   }}
                   className="btn btn-sm btn-secondary flex items-center gap-1"
                 >
@@ -612,10 +691,18 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                 <div className="relative">
                   <button
                     onClick={() => {
-                      const strategy = prompt('Bidding Strategy (dynamic_down/up_and_down/fixed):', '');
-                      if (strategy) {
-                        handleBulkAction('apply_bidding_strategy', { strategy });
-                      }
+                      openPromptDialog({
+                        title: 'Apply Bidding Strategy',
+                        label: 'Select bidding strategy',
+                        placeholder: '',
+                        defaultValue: 'dynamic_down',
+                        options: [
+                          { value: 'dynamic_down', label: 'Dynamic Bids — Down Only' },
+                          { value: 'up_and_down', label: 'Dynamic Bids — Up and Down' },
+                          { value: 'fixed', label: 'Fixed Bids' },
+                        ],
+                        onSubmit: (val) => handleBulkAction('apply_bidding_strategy', { strategy: val }),
+                      });
                     }}
                     className="btn btn-sm btn-secondary flex items-center gap-1"
                   >
@@ -651,7 +738,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                         
                         sortedData.forEach(row => {
                           const rowId = String(row[keyField]);
-                          const isCurrentlySelected = selectedRows.has(rowId);
+                          const isCurrentlySelected = normalizedSelectedRows.has(rowId);
                           
                           // Collect IDs that need state change
                           if (shouldSelect && !isCurrentlySelected) {
@@ -874,7 +961,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                       onClick={() => !isEditing && onRowClick?.(row)}
                       className={cn(
                         'hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group',
-                        selectedRows.has(rowId) && 'bg-amazon-orange/5',
+                        normalizedSelectedRows.has(rowId) && 'bg-amazon-orange/5',
                         isEditing && 'bg-blue-50 dark:bg-blue-900/20'
                       )}
                     >
@@ -882,7 +969,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                         <td className="px-4 py-3">
                           <input
                             type="checkbox"
-                            checked={selectedRows.has(rowId)}
+                            checked={normalizedSelectedRows.has(rowId)}
                             onChange={() => onSelectRow?.(rowId)}
                             onClick={(e) => e.stopPropagation()}
                             className="rounded accent-amazon-orange"
@@ -1051,10 +1138,112 @@ export default function SmartGrid<T extends Record<string, unknown>>({
         </div>
       </div>
 
+      {/* Pagination Controls */}
+      {pagination && pagination.totalPages > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30">
+          {/* Left: Row info */}
+          <div className="text-sm text-gray-600 dark:text-gray-400 tabular-nums">
+            Showing{' '}
+            <span className="font-medium text-gray-900 dark:text-white">
+              {Math.min((pagination.page - 1) * pagination.pageSize + 1, pagination.total)}
+            </span>
+            {' '}-{' '}
+            <span className="font-medium text-gray-900 dark:text-white">
+              {Math.min(pagination.page * pagination.pageSize, pagination.total)}
+            </span>
+            {' '}of{' '}
+            <span className="font-medium text-gray-900 dark:text-white">{pagination.total.toLocaleString()}</span>
+            {' '}results
+          </div>
+
+          {/* Center: Page navigation */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => onPageChange?.(1)}
+              disabled={pagination.page <= 1}
+              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="First page"
+            >
+              <ChevronsLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onPageChange?.(pagination.page - 1)}
+              disabled={pagination.page <= 1}
+              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Previous page"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+
+            {/* Page number buttons */}
+            {(() => {
+              const pages: number[] = [];
+              const current = pagination.page;
+              const total = pagination.totalPages;
+              const maxVisible = 5;
+              
+              let start = Math.max(1, current - Math.floor(maxVisible / 2));
+              let end = Math.min(total, start + maxVisible - 1);
+              if (end - start + 1 < maxVisible) {
+                start = Math.max(1, end - maxVisible + 1);
+              }
+              
+              for (let i = start; i <= end; i++) pages.push(i);
+              
+              return pages.map(p => (
+                <button
+                  key={p}
+                  onClick={() => onPageChange?.(p)}
+                  className={cn(
+                    'min-w-[32px] h-8 px-2 rounded-lg text-sm font-medium transition-all',
+                    p === current
+                      ? 'bg-amazon-orange text-black shadow-sm'
+                      : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                  )}
+                >
+                  {p}
+                </button>
+              ));
+            })()}
+
+            <button
+              onClick={() => onPageChange?.(pagination.page + 1)}
+              disabled={pagination.page >= pagination.totalPages}
+              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Next page"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onPageChange?.(pagination.totalPages)}
+              disabled={pagination.page >= pagination.totalPages}
+              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Last page"
+            >
+              <ChevronsRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Right: Page size selector */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600 dark:text-gray-400">Rows:</span>
+            <select
+              value={pagination.pageSize}
+              onChange={(e) => onPageSizeChange?.(Number(e.target.value))}
+              className="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amazon-orange/50 focus:border-amazon-orange transition-colors"
+            >
+              {[25, 50, 100].map(size => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
       {/* Bulk Action Confirmation Modal */}
       {bulkActionConfirmation && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="card max-w-md w-full p-6 shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setBulkActionConfirmation(null)}>
+          <div className="card max-w-md w-full p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
               Confirm Bulk Action
             </h3>
@@ -1084,6 +1273,75 @@ export default function SmartGrid<T extends Record<string, unknown>>({
               >
                 {bulkActionInProgress && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Prompt Input Dialog — replaces browser prompt() */}
+      {promptDialog && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setPromptDialog(null)}>
+          <div
+            className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 max-w-sm w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              {promptDialog.title}
+            </h3>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              {promptDialog.label}
+            </label>
+            {promptDialog.options ? (
+              <select
+                value={promptValue}
+                onChange={(e) => setPromptValue(e.target.value)}
+                className="w-full px-4 py-2.5 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amazon-orange/50 focus:border-amazon-orange transition-all"
+              >
+                {promptDialog.options.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                ref={promptInputRef}
+                type={promptDialog.inputType || 'text'}
+                value={promptValue}
+                onChange={(e) => setPromptValue(e.target.value)}
+                placeholder={promptDialog.placeholder}
+                step={promptDialog.inputType === 'number' ? 'any' : undefined}
+                className="w-full px-4 py-2.5 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amazon-orange/50 focus:border-amazon-orange transition-all"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && promptValue.trim()) {
+                    promptDialog.onSubmit(promptValue.trim());
+                    setPromptDialog(null);
+                  } else if (e.key === 'Escape') {
+                    setPromptDialog(null);
+                  }
+                }}
+                autoFocus
+              />
+            )}
+            <div className="flex gap-3 justify-end mt-6">
+              <button
+                onClick={() => setPromptDialog(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (promptValue.trim()) {
+                    promptDialog.onSubmit(promptValue.trim());
+                    setPromptDialog(null);
+                  }
+                }}
+                disabled={!promptValue.trim()}
+                className="px-4 py-2 text-sm font-medium text-black bg-amazon-orange hover:bg-amazon-orange-dark disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+              >
+                Apply
               </button>
             </div>
           </div>

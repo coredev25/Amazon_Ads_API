@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Target,
+  Crosshair,
   Key,
   Lightbulb,
   BookOpen,
@@ -26,10 +27,12 @@ import {
 import { cn } from '@/utils/helpers';
 import { useAuth } from '@/contexts/AuthContext';
 import MultiAccountSwitcher from './MultiAccountSwitcher';
-import { fetchAccounts, switchAccount } from '@/utils/api';
+import { fetchAccounts, switchAccount, fetchRecommendations, fetchNegativeCandidates, fetchAlerts } from '@/utils/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/contexts/ThemeContext';
 import { search, SearchResult } from '@/utils/api';
+import { useLiveSettings } from '@/contexts/LiveSettingsContext';
+import { RefreshCw, Radio } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -39,6 +42,7 @@ const navItems = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Command Center' },
   { href: '/dashboard/campaigns', icon: Target, label: 'Campaign Manager' },
   { href: '/dashboard/keywords', icon: Key, label: 'Keywords & Targeting' },
+  { href: '/dashboard/targeting', icon: Crosshair, label: 'Product Targeting' },
   { href: '/dashboard/recommendations', icon: Lightbulb, label: 'AI Recommendations' },
   { href: '/dashboard/financial', icon: DollarSign, label: 'Financial Metrics' },
   { href: '/dashboard/ai-control', icon: Zap, label: 'AI Control' },
@@ -59,12 +63,44 @@ export default function Layout({ children }: LayoutProps) {
   const queryClient = useQueryClient();
   const [currentAccountId, setCurrentAccountId] = useState<string | undefined>();
 
+  const liveSettings = useLiveSettings();
+
   // Fetch accounts for multi-account switcher
   const { data: accounts } = useQuery({
     queryKey: ['accounts'],
     queryFn: fetchAccounts,
     enabled: true,
   });
+
+  // Nav badge counts
+  const { data: pendingRecs } = useQuery({
+    queryKey: ['nav-badge-recs'],
+    queryFn: () => fetchRecommendations({ limit: 200 }),
+    refetchInterval: liveSettings.autoRefresh ? liveSettings.refreshInterval : false,
+  });
+
+  const { data: negCandidates } = useQuery({
+    queryKey: ['nav-badge-negatives'],
+    queryFn: () => fetchNegativeCandidates({ limit: 200 }),
+    refetchInterval: liveSettings.autoRefresh ? liveSettings.refreshInterval : false,
+  });
+
+  const { data: alertsData } = useQuery({
+    queryKey: ['nav-badge-alerts'],
+    queryFn: () => fetchAlerts(50),
+    refetchInterval: liveSettings.autoRefresh ? liveSettings.refreshInterval : false,
+  });
+
+  // Compute badge counts
+  const recCount = pendingRecs?.filter((r: any) => !r.applied && !r.rejected)?.length || 0;
+  const negCritical = negCandidates?.filter((n: any) => n.severity === 'critical' || n.severity === 'high')?.length || 0;
+  const alertCount = alertsData?.length || 0;
+
+  const badgeCounts: Record<string, number> = {
+    '/dashboard/recommendations': recCount,
+    '/dashboard/negatives': negCritical,
+    '/dashboard': alertCount,
+  };
 
   const handleAccountChange = async (accountId: string) => {
     try {
@@ -243,26 +279,25 @@ export default function Layout({ children }: LayoutProps) {
             </Link>
           )}
           {/* Toggle Button */}
-          <div className="h-16 flex items-center justify-end px-4 border-b border-gray-200 dark:border-gray-700">
-            <button
-              onClick={toggleSidebar}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              aria-label="Toggle sidebar"
-            >
-              {(sidebarOpen || mobileMenuOpen) ? (
-                <X className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-              ) : (
-                <Menu className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-              )}
-            </button>
-          </div>
+          <button
+            onClick={toggleSidebar}
+            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            aria-label="Toggle sidebar"
+          >
+            {(sidebarOpen || mobileMenuOpen) ? (
+              <X className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            ) : (
+              <Menu className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            )}
+          </button>
         </div>
 
         {/* Navigation */}
-        <nav className="p-4 space-y-2">
+        <nav className="p-4 space-y-1">
           {navItems.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;
+            const badge = badgeCounts[item.href];
 
             return (
               <Link
@@ -270,17 +305,32 @@ export default function Layout({ children }: LayoutProps) {
                 href={item.href}
                 onClick={() => setMobileMenuOpen(false)}
                 className={cn(
-                  'nav-item',
+                  'nav-item group relative',
                   isActive && 'active',
                   !sidebarOpen && 'justify-center px-3'
                 )}
                 title={!sidebarOpen ? item.label : undefined}
               >
-                <Icon className="w-5 h-5 flex-shrink-0" />
+                <div className="relative">
+                  <Icon className="w-5 h-5 flex-shrink-0" />
+                  {!sidebarOpen && badge > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 nav-badge text-[9px]">
+                      {badge > 99 ? '99+' : badge}
+                    </span>
+                  )}
+                </div>
                 {sidebarOpen && (
-                  <span className="animate-fade-in">{item.label}</span>
+                  <span className="flex-1 animate-fade-in">{item.label}</span>
                 )}
-                {sidebarOpen && isActive && (
+                {sidebarOpen && badge > 0 && (
+                  <span className={cn(
+                    'nav-badge',
+                    item.href === '/dashboard/negatives' && 'nav-badge-danger'
+                  )}>
+                    {badge > 99 ? '99+' : badge}
+                  </span>
+                )}
+                {sidebarOpen && isActive && !badge && (
                   <ChevronRight className="w-4 h-4 ml-auto text-amazon-orange" />
                 )}
               </Link>
@@ -314,6 +364,37 @@ export default function Layout({ children }: LayoutProps) {
               </h1>
             </div>
             <div className="flex items-center gap-2 md:gap-4">
+              {/* Auto-Refresh Toggle + Last Synced */}
+              <div className="hidden md:flex items-center gap-2">
+                <button
+                  onClick={liveSettings.toggleAutoRefresh}
+                  className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 border',
+                    liveSettings.autoRefresh
+                      ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800'
+                      : 'bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  )}
+                  title={liveSettings.autoRefresh ? 'Auto-refresh ON (1 min)' : 'Auto-refresh OFF'}
+                >
+                  {liveSettings.autoRefresh ? (
+                    <>
+                      <Radio className="w-3 h-3 pulse-dot" />
+                      <span>Live</span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3 h-3" />
+                      <span>Auto</span>
+                    </>
+                  )}
+                </button>
+                {liveSettings.lastSyncedAt && (
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
+                    {liveSettings.getTimeSinceSync()}
+                  </span>
+                )}
+              </div>
+
               {/* Search */}
               <div className="relative" ref={searchRef}>
                 <div className="relative">

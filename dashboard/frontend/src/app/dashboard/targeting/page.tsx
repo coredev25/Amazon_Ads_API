@@ -36,25 +36,35 @@ export default function ProductTargetingPage() {
   const [targetingTypeFilter, setTargetingTypeFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
   const [selectedRows, setSelectedRows] = useState<Set<string | number>>(new Set());
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   
   const queryClient = useQueryClient();
 
   // Calculate days from dateRange
   const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
 
-  const { data: targets = [], isLoading, refetch } = useQuery({
-    queryKey: ['product-targets', dateRange.type, targetingTypeFilter],
+  const { data: targetingResponse, isLoading, refetch } = useQuery({
+    queryKey: ['product-targets', dateRange.type, targetingTypeFilter, days, page, pageSize],
     queryFn: async () => {
-      const response = await fetch('/api/product-targeting?days=' + days);
-      if (!response.ok) throw new Error('Failed to fetch product targets');
-      const data = await response.json();
-      return data.map((target: any) => ({
-        ...target,
-        targetingTypeBadge: getTargetingTypeBadge(target.targeting_type),
-        profitability: calculateProfitability(target.acos, 0.09), // Default 9% target ACOS
-      }));
+      const res = await fetchProductTargets({
+        days,
+        targeting_type: targetingTypeFilter !== 'all' ? targetingTypeFilter as 'asin' | 'category' | 'brand' : undefined,
+        page,
+        page_size: pageSize,
+      });
+      return {
+        ...res,
+        data: res.data.map((target: ProductTarget) => ({
+          ...target,
+          targetingTypeBadge: getTargetingTypeBadge(target.targeting_type),
+          profitability: calculateProfitability(target.acos ?? 0, 0.09), // Default 9% target ACOS
+        })),
+      };
     },
   });
+
+  const targets = targetingResponse?.data ?? [];
 
   // Targeting type to UI badge mapping
   const getTargetingTypeBadge = (type: string): string => {
@@ -215,8 +225,8 @@ export default function ProductTargetingPage() {
       </div>
 
       {/* Targeting Type Info */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="card p-4 border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 stagger-animation">
+        <div className="card p-4 border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 hover-lift">
           <div className="flex items-center gap-2 mb-2">
             <Package className="w-5 h-5 text-blue-600 dark:text-blue-400" />
             <h3 className="font-semibold text-gray-900 dark:text-white">ASIN Targeting</h3>
@@ -225,7 +235,7 @@ export default function ProductTargetingPage() {
             Target specific product ASINs to reach exact product audiences
           </p>
         </div>
-        <div className="card p-4 border border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20">
+        <div className="card p-4 border border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/20 hover-lift">
           <div className="flex items-center gap-2 mb-2">
             <Tag className="w-5 h-5 text-purple-600 dark:text-purple-400" />
             <h3 className="font-semibold text-gray-900 dark:text-white">Category Targeting</h3>
@@ -234,7 +244,7 @@ export default function ProductTargetingPage() {
             Target product categories to reach buyers browsing specific categories
           </p>
         </div>
-        <div className="card p-4 border border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20">
+        <div className="card p-4 border border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20 hover-lift">
           <div className="flex items-center gap-2 mb-2">
             <AlertCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
             <h3 className="font-semibold text-gray-900 dark:text-white">Brand Targeting</h3>
@@ -291,21 +301,32 @@ export default function ProductTargetingPage() {
           emptyMessage="No product targets found. Create some ASIN, Category, or Brand targets to get started."
           enableSelection={true}
           selectedRows={selectedRows}
+          pagination={targetingResponse ? {
+            page: targetingResponse.page,
+            pageSize: targetingResponse.page_size,
+            total: targetingResponse.total,
+            totalPages: targetingResponse.total_pages,
+          } : undefined}
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(1); }}
           onSelectRow={(id) => {
+            const strId = String(id);
             const newSelected = new Set(selectedRows);
-            if (newSelected.has(id)) {
-              newSelected.delete(id);
+            if (newSelected.has(strId)) {
+              newSelected.delete(strId);
             } else {
-              newSelected.add(id);
+              newSelected.add(strId);
             }
             setSelectedRows(newSelected);
           }}
           onSelectAllRows={(ids, select) => {
+            const newSelected = new Set(selectedRows);
             if (select) {
-              setSelectedRows(new Set(ids));
+              ids.forEach(id => newSelected.add(String(id)));
             } else {
-              setSelectedRows(new Set());
+              ids.forEach(id => newSelected.delete(String(id)));
             }
+            setSelectedRows(newSelected);
           }}
           onBulkAction={async (action, ids, params) => {
             console.log(`Bulk ${action} action for ${ids.length} targets`, params);

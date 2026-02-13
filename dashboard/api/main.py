@@ -240,6 +240,15 @@ class AIInsight(BaseModel):
     color: str  # 'green', 'orange', 'blue', etc.
 
 
+class PaginatedResponse(BaseModel):
+    """Generic paginated response wrapper"""
+    data: List[Any]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class CampaignData(BaseModel):
     campaign_id: int
     campaign_name: str
@@ -1658,16 +1667,18 @@ async def get_ai_insights(days: int = Query(7, ge=1, le=90)):
 # API ENDPOINTS - CAMPAIGN MANAGEMENT
 # ============================================================================
 
-@app.get("/api/campaigns", response_model=List[CampaignData])
+@app.get("/api/campaigns")
 async def get_campaigns(
     days: int = Query(7, ge=1, le=90),
-    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID")
+    portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=10, le=200, description="Items per page"),
 ):
-    """Get all campaigns with performance data"""
+    """Get campaigns with performance data (paginated)"""
     try:
         campaigns = db_connector.get_campaigns_with_performance(days, portfolio_id)
         
-        result = []
+        all_results = []
         for campaign in campaigns:
             spend = float(campaign.get('total_cost', 0) or 0)
             sales = float(campaign.get('total_sales', 0) or 0)
@@ -1675,7 +1686,7 @@ async def get_campaigns(
             clicks = int(campaign.get('total_clicks', 0) or 0)
             orders = int(campaign.get('total_conversions', 0) or 0)
             
-            result.append(CampaignData(
+            all_results.append(CampaignData(
                 campaign_id=campaign['campaign_id'],
                 campaign_name=campaign['campaign_name'],
                 campaign_type=campaign.get('campaign_type', 'SP'),
@@ -1697,7 +1708,20 @@ async def get_campaigns(
                 portfolio_name=campaign.get('portfolio_name')
             ))
         
-        return result
+        # Paginate
+        total = len(all_results)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_data = all_results[start:end]
+        
+        return {
+            "data": page_data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
     except Exception as e:
         logger.error(f"Error fetching campaigns: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1801,28 +1825,43 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
                 reason=f"Manual {action.action_type} change from dashboard by {current_user.email}"
             )
         
+        # Sync to Amazon Ads API (non-blocking: DB is already committed)
         sync_manager = _get_amazon_sync_manager()
+        amazon_synced = False
         if sync_manager:
-            if action.action_type in ['pause', 'enable', 'budget']:
-                if action.action_type == 'budget':
-                    daily_budget = float(action.new_value)
-                else:
-                    daily_budget = budget_amount or 0.0
-                if daily_budget <= 0:
-                    daily_budget = 1.0
-                    logger.warning(
-                        f"Campaign {campaign_id} missing budget; defaulting dailyBudget to $1.00 for Amazon update"
+            try:
+                if action.action_type in ['pause', 'enable', 'budget']:
+                    if action.action_type == 'budget':
+                        daily_budget = float(action.new_value)
+                    else:
+                        daily_budget = budget_amount or 0.0
+                    if daily_budget <= 0:
+                        daily_budget = 1.0
+                        logger.warning(
+                            f"Campaign {campaign_id} missing budget; defaulting dailyBudget to $1.00 for Amazon update"
+                        )
+                    state = _normalize_campaign_state(
+                        'PAUSED' if action.action_type == 'pause' else 'ENABLED' if action.action_type == 'enable' else campaign_status
                     )
-                state = _normalize_campaign_state(
-                    'PAUSED' if action.action_type == 'pause' else 'ENABLED' if action.action_type == 'enable' else campaign_status
-                )
-                sync_manager.update_campaign_budgets([{
-                    'campaign_id': campaign_id,
-                    'daily_budget': daily_budget,
-                    'state': state
-                }])
+                    sync_manager.update_campaign_budgets([{
+                        'campaign_id': campaign_id,
+                        'daily_budget': daily_budget,
+                        'state': state
+                    }])
+                    amazon_synced = True
+                    logger.info(f"Campaign {campaign_id} synced to Amazon: {action.action_type}")
+            except Exception as sync_err:
+                logger.error(f"Amazon sync failed for campaign {campaign_id}: {sync_err}")
+        else:
+            logger.warning(f"Amazon sync skipped for campaign {campaign_id}: sync manager unavailable")
 
-        return {"status": "success", "message": f"Action {action.action_type} applied to campaign {campaign_id}"}
+        return {
+            "status": "success",
+            "message": f"Action {action.action_type} applied to campaign {campaign_id}",
+            "amazon_synced": amazon_synced
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error applying campaign action: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1832,12 +1871,14 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
 # API ENDPOINTS - KEYWORDS / TARGETING
 # ============================================================================
 
-@app.get("/api/keywords", response_model=List[KeywordData])
+@app.get("/api/keywords")
 async def get_keywords(
     campaign_id: Optional[int] = None,
     ad_group_id: Optional[int] = None,
     days: int = Query(7, ge=1, le=90),
-    limit: int = Query(100, ge=1, le=1000)
+    limit: int = Query(200, ge=1, le=2000),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
 ):
     """Get keywords with performance data"""
     try:
@@ -1927,7 +1968,19 @@ async def get_keywords(
             if len(all_keywords) >= limit:
                 break
         
-        return all_keywords[:limit]
+        all_keywords = all_keywords[:limit]
+        total = len(all_keywords)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        end = start + page_size
+        
+        return {
+            "data": all_keywords[start:end],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
     except Exception as e:
         logger.error(f"Error fetching keywords: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2024,17 +2077,30 @@ async def update_keyword_bid(keyword_id: int, action: ActionRequest, current_use
             change_id=change_id
         )
         
-        # Sync bid change to Amazon Ads API
+        # Sync bid change to Amazon Ads API (non-blocking: DB is already committed)
+        amazon_synced = False
         sync_manager = _get_amazon_sync_manager()
         if sync_manager:
-            sync_manager.update_keyword_bids([{
-                'keyword_id': keyword_id,
-                'bid': float(action.new_value),
-                'state': _normalize_campaign_state(keyword_state)
-            }])
+            try:
+                sync_manager.update_keyword_bids([{
+                    'keyword_id': keyword_id,
+                    'bid': float(action.new_value),
+                    'state': _normalize_campaign_state(keyword_state)
+                }])
+                amazon_synced = True
+                logger.info(f"Keyword {keyword_id} bid synced to Amazon: ${action.new_value}")
+            except Exception as sync_err:
+                logger.error(f"Amazon sync failed for keyword {keyword_id}: {sync_err}")
+        else:
+            logger.warning(f"Amazon sync skipped for keyword {keyword_id}: sync manager unavailable")
         
         logger.info(f"Bid updated for keyword {keyword_id}: ${action.old_value} -> ${action.new_value} by {current_user.username}")
-        return {"status": "success", "message": f"Bid updated for keyword {keyword_id}", "change_id": change_id}
+        return {
+            "status": "success",
+            "message": f"Bid updated for keyword {keyword_id}",
+            "change_id": change_id,
+            "amazon_synced": amazon_synced
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -2444,46 +2510,130 @@ async def get_recommendations(
 
 @app.post("/api/recommendations/{recommendation_id}/approve")
 async def approve_recommendation(recommendation_id: str, background_tasks: BackgroundTasks):
-    """Approve an AI recommendation"""
+    """Approve an AI recommendation — applies the change to DB and syncs to Amazon"""
     try:
-        # Update recommendation status in database
+        rec = None
+        
         with db_connector.get_connection() as conn:
-            with conn.cursor() as cursor:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # 1. Get recommendation details
+                cursor.execute("""
+                    SELECT entity_type, entity_id, adjustment_type,
+                           current_value, recommended_value
+                    FROM recommendation_tracking
+                    WHERE recommendation_id = %s
+                """, (recommendation_id,))
+                rec = cursor.fetchone()
+                
+                if not rec:
+                    raise HTTPException(status_code=404, detail=f"Recommendation {recommendation_id} not found")
+                
+                entity_type = rec['entity_type']
+                entity_id = rec['entity_id']
+                current_value = float(rec['current_value'])
+                recommended_value = float(rec['recommended_value'])
+                adjustment_type = rec.get('adjustment_type', 'bid')
+                
+                # 2. Mark recommendation as applied
                 cursor.execute("""
                     UPDATE recommendation_tracking 
                     SET applied = TRUE, applied_at = NOW()
                     WHERE recommendation_id = %s
                 """, (recommendation_id,))
+                
+                # 3. Log in recommendation_actions
+                cursor.execute("""
+                    INSERT INTO recommendation_actions 
+                    (recommendation_id, entity_type, entity_id, action_taken, 
+                     original_value, recommended_value, final_value, execution_status,
+                     executed_at)
+                    VALUES (%s, %s, %s, 'approved', %s, %s, %s, 'executed', NOW())
+                """, (recommendation_id, entity_type, entity_id,
+                      current_value, recommended_value, recommended_value))
+                
+                # 4. Apply the actual change to the entity in the database
+                if entity_type == 'keyword' and adjustment_type == 'bid':
+                    cursor.execute("""
+                        UPDATE keywords SET bid = %s, last_modified = NOW()
+                        WHERE keyword_id = %s
+                    """, (recommended_value, entity_id))
+                elif entity_type == 'campaign' and adjustment_type == 'budget':
+                    cursor.execute("""
+                        UPDATE campaigns SET budget_amount = %s, updated_at = NOW()
+                        WHERE campaign_id = %s
+                    """, (recommended_value, entity_id))
+                elif entity_type == 'campaign' and adjustment_type in ('pause', 'enable'):
+                    new_status = 'PAUSED' if adjustment_type == 'pause' else 'ENABLED'
+                    cursor.execute("""
+                        UPDATE campaigns SET campaign_status = %s, updated_at = NOW()
+                        WHERE campaign_id = %s
+                    """, (new_status, entity_id))
+                
+                # 5. Log in bid_change_history for bid changes
+                if adjustment_type == 'bid':
+                    change_amount = recommended_value - current_value
+                    change_pct = (change_amount / current_value * 100) if current_value else 0
+                    cursor.execute("""
+                        INSERT INTO bid_change_history
+                            (entity_type, entity_id, entity_name, change_date,
+                             old_bid, new_bid, change_amount, change_percentage,
+                             reason, triggered_by)
+                        VALUES (%s, %s, %s, NOW(), %s, %s, %s, %s, %s, 'ai_recommendation')
+                    """, (entity_type, entity_id, f'{entity_type} {entity_id}',
+                          current_value, recommended_value, change_amount, change_pct,
+                          f'AI recommendation approved: {recommendation_id}'))
+                
+                # 6. Create bid lock to prevent AI from immediately overwriting
+                if adjustment_type == 'bid':
+                    try:
+                        db_connector.create_bid_lock(
+                            entity_type=entity_type,
+                            entity_id=entity_id,
+                            lock_days=rule_config.bid_change_cooldown_days if rule_config else 3,
+                            reason=f"Recommendation {recommendation_id} applied from dashboard"
+                        )
+                    except Exception as lock_err:
+                        logger.warning(f"Could not create bid lock: {lock_err}")
+                
                 conn.commit()
         
-        # Log the approval in recommendation_actions
-        try:
-            with db_connector.get_connection() as conn:
-                import psycopg2.extras
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                    # Get recommendation details
-                    cursor.execute("""
-                        SELECT entity_type, entity_id, current_value, recommended_value
-                        FROM recommendation_tracking
-                        WHERE recommendation_id = %s
-                    """, (recommendation_id,))
-                    rec = cursor.fetchone()
+        # 7. Sync to Amazon Ads API
+        if rec:
+            sync_manager = _get_amazon_sync_manager()
+            if sync_manager:
+                try:
+                    entity_type = rec['entity_type']
+                    entity_id = rec['entity_id']
+                    recommended_value = float(rec['recommended_value'])
+                    adjustment_type = rec.get('adjustment_type', 'bid')
                     
-                    if rec:
-                        cursor.execute("""
-                            INSERT INTO recommendation_actions 
-                            (recommendation_id, entity_type, entity_id, action_taken, 
-                             original_value, recommended_value, final_value, execution_status)
-                            VALUES (%s, %s, %s, 'approved', %s, %s, %s, 'pending')
-                        """, (recommendation_id, rec['entity_type'], rec['entity_id'],
-                              rec['current_value'], rec['recommended_value'], rec['recommended_value']))
-                        conn.commit()
-        except Exception as e:
-            logger.warning(f"Could not log recommendation action: {e}")
+                    if entity_type == 'keyword' and adjustment_type == 'bid':
+                        sync_manager.update_keyword_bids([{
+                            'keyword_id': entity_id,
+                            'bid': recommended_value,
+                        }])
+                    elif entity_type == 'campaign':
+                        if adjustment_type == 'budget':
+                            sync_manager.update_campaign_budgets([{
+                                'campaign_id': entity_id,
+                                'daily_budget': recommended_value,
+                            }])
+                        elif adjustment_type in ('pause', 'enable'):
+                            state = 'PAUSED' if adjustment_type == 'pause' else 'ENABLED'
+                            sync_manager.update_campaign_state(entity_id, state)
+                    
+                    logger.info(f"Recommendation {recommendation_id} synced to Amazon")
+                except Exception as sync_err:
+                    logger.error(f"Amazon sync failed for recommendation {recommendation_id}: {sync_err}")
+            else:
+                logger.warning(f"Amazon sync skipped for recommendation {recommendation_id}: sync manager unavailable")
         
-        logger.info(f"Recommendation approved: {recommendation_id}")
+        logger.info(f"Recommendation approved and executed: {recommendation_id}")
         
-        return {"status": "success", "message": f"Recommendation {recommendation_id} approved and scheduled for execution"}
+        return {"status": "success", "message": f"Recommendation {recommendation_id} approved and applied"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error approving recommendation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2493,32 +2643,44 @@ async def approve_recommendation(recommendation_id: str, background_tasks: Backg
 async def reject_recommendation(recommendation_id: str, reason: Optional[str] = None):
     """Reject an AI recommendation"""
     try:
-        # Log the rejection in recommendation_actions
-        try:
-            with db_connector.get_connection() as conn:
-                import psycopg2.extras
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                    cursor.execute("""
-                        SELECT entity_type, entity_id, current_value, recommended_value
-                        FROM recommendation_tracking
-                        WHERE recommendation_id = %s
-                    """, (recommendation_id,))
-                    rec = cursor.fetchone()
-                    
-                    if rec:
-                        cursor.execute("""
-                            INSERT INTO recommendation_actions 
-                            (recommendation_id, entity_type, entity_id, action_taken, 
-                             original_value, recommended_value, reason, execution_status)
-                            VALUES (%s, %s, %s, 'rejected', %s, %s, %s, 'cancelled')
-                        """, (recommendation_id, rec['entity_type'], rec['entity_id'],
-                              rec['current_value'], rec['recommended_value'], reason))
-                        conn.commit()
-        except Exception as e:
-            logger.warning(f"Could not log recommendation rejection: {e}")
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # Get recommendation details
+                cursor.execute("""
+                    SELECT entity_type, entity_id, current_value, recommended_value
+                    FROM recommendation_tracking
+                    WHERE recommendation_id = %s
+                """, (recommendation_id,))
+                rec = cursor.fetchone()
+                
+                if not rec:
+                    raise HTTPException(status_code=404, detail=f"Recommendation {recommendation_id} not found")
+                
+                # Mark recommendation as not applied (rejected)
+                cursor.execute("""
+                    UPDATE recommendation_tracking 
+                    SET applied = FALSE, updated_at = NOW(),
+                        metadata = COALESCE(metadata, '{}'::jsonb) || 
+                                   jsonb_build_object('rejected', true, 'reject_reason', %s)
+                    WHERE recommendation_id = %s
+                """, (reason or 'No reason provided', recommendation_id))
+                
+                # Log the rejection in recommendation_actions
+                cursor.execute("""
+                    INSERT INTO recommendation_actions 
+                    (recommendation_id, entity_type, entity_id, action_taken, 
+                     original_value, recommended_value, reason, execution_status)
+                    VALUES (%s, %s, %s, 'rejected', %s, %s, %s, 'cancelled')
+                """, (recommendation_id, rec['entity_type'], rec['entity_id'],
+                      rec['current_value'], rec['recommended_value'], reason))
+                
+                conn.commit()
         
         logger.info(f"Recommendation rejected: {recommendation_id}, reason: {reason}")
         return {"status": "success", "message": f"Recommendation {recommendation_id} rejected"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error rejecting recommendation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2720,19 +2882,88 @@ async def get_negative_candidates(campaign_id: Optional[int] = None, limit: int 
 
 @app.post("/api/negatives/{keyword_id}/approve")
 async def approve_negative_keyword(keyword_id: int, match_type: str = "negative_exact"):
-    """Approve a negative keyword candidate"""
+    """Approve a negative keyword candidate — creates the negative keyword in Amazon and records it"""
     try:
+        keyword_text = None
+        campaign_id = None
+        ad_group_id = None
+        cost_at_id = None
+
         with db_connector.get_connection() as conn:
-            with conn.cursor() as cursor:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # 1. Get candidate details
+                cursor.execute("""
+                    SELECT keyword_text, campaign_id, ad_group_id, cost_at_identification,
+                           reason, consecutive_failures
+                    FROM negative_keyword_candidates
+                    WHERE keyword_id = %s
+                """, (keyword_id,))
+                candidate = cursor.fetchone()
+
+                if not candidate:
+                    raise HTTPException(status_code=404, detail=f"Negative keyword candidate {keyword_id} not found")
+
+                keyword_text = candidate['keyword_text']
+                campaign_id = candidate['campaign_id']
+                ad_group_id = candidate['ad_group_id']
+                cost_at_id = float(candidate.get('cost_at_identification') or 0)
+
+                # 2. Mark candidate as applied
                 cursor.execute("""
                     UPDATE negative_keyword_candidates
                     SET status = 'applied', applied_date = NOW(), suggested_match_type = %s
                     WHERE keyword_id = %s
                 """, (match_type, keyword_id))
+
+                # 3. Record in negative_keyword_history for audit trail
+                cursor.execute("""
+                    INSERT INTO negative_keyword_history
+                        (keyword_id, keyword_text, match_type, campaign_id, ad_group_id,
+                         marked_negative_date, reason, cost_at_marking,
+                         consecutive_zero_conversion_windows, status)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, %s, 'active')
+                """, (
+                    keyword_id, keyword_text, match_type, campaign_id, ad_group_id,
+                    candidate.get('reason', 'Approved from dashboard'),
+                    cost_at_id,
+                    candidate.get('consecutive_failures', 0)
+                ))
+
+                # 4. Log in change_history
+                cursor.execute("""
+                    INSERT INTO change_history
+                        (entity_type, entity_id, entity_name, field_name,
+                         old_value, new_value, change_type, triggered_by, reason)
+                    VALUES ('negative_keyword', %s, %s, 'status', 'candidate', 'applied',
+                            'create', 'dashboard_manual', %s)
+                """, (keyword_id, keyword_text,
+                      f'Negative keyword approved: {keyword_text} ({match_type})'))
+
                 conn.commit()
-        
-        logger.info(f"Negative keyword approved: {keyword_id} as {match_type}")
-        return {"status": "success", "message": f"Keyword {keyword_id} marked as negative ({match_type})"}
+
+        # 5. Sync to Amazon Ads API — create the negative keyword
+        sync_manager = _get_amazon_sync_manager()
+        if sync_manager:
+            try:
+                sync_manager.create_negative_keywords([{
+                    'campaign_id': campaign_id,
+                    'ad_group_id': ad_group_id,
+                    'keyword_text': keyword_text,
+                    'match_type': match_type.upper(),
+                    'state': 'ENABLED',
+                }])
+                logger.info(f"Negative keyword synced to Amazon: {keyword_text} ({match_type})")
+            except Exception as sync_err:
+                logger.error(f"Amazon sync failed for negative keyword {keyword_id}: {sync_err}")
+                # DB change already committed; log the sync failure but don't rollback
+        else:
+            logger.warning(f"Amazon sync skipped for negative keyword {keyword_id}: sync manager unavailable")
+
+        logger.info(f"Negative keyword approved: {keyword_id} ({keyword_text}) as {match_type}")
+        return {"status": "success", "message": f"Keyword '{keyword_text}' added as negative ({match_type})"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error approving negative keyword: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3495,12 +3726,14 @@ async def get_portfolios(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/ad-groups", response_model=List[AdGroupData])
+@app.get("/api/ad-groups")
 async def get_ad_groups(
     campaign_id: Optional[int] = None,
-    days: int = Query(7, ge=1, le=90)
+    days: int = Query(7, ge=1, le=90),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
 ):
-    """Get ad groups with performance data"""
+    """Get ad groups with performance data (paginated)"""
     try:
         ad_groups = db_connector.get_ad_groups_with_performance(campaign_id, days) if campaign_id else []
         
@@ -3546,19 +3779,25 @@ async def get_ad_groups(
                 cvr=round(orders / clicks * 100, 2) if clicks > 0 else 0
             ))
         
-        return result
+        total = len(result)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return {"data": result[start:end], "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
     except Exception as e:
         logger.error(f"Error fetching ad groups: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/targeting", response_model=List[ProductTargetData])
+@app.get("/api/targeting")
 async def get_product_targeting(
     campaign_id: Optional[int] = None,
     ad_group_id: Optional[int] = None,
-    days: int = Query(7, ge=1, le=90)
+    days: int = Query(7, ge=1, le=90),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
 ):
-    """Get product targeting data (ASINs and Categories)"""
+    """Get product targeting data (paginated)"""
     try:
         with db_connector.get_connection() as conn:
             import psycopg2.extras
@@ -3627,19 +3866,25 @@ async def get_product_targeting(
                         clicks=clicks
                     ))
                 
-                return result
+                total = len(result)
+                total_pages = max(1, (total + page_size - 1) // page_size)
+                start_idx = (page - 1) * page_size
+                end_idx = start_idx + page_size
+                return {"data": result[start_idx:end_idx], "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
     except Exception as e:
         logger.error(f"Error fetching product targeting: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/ads", response_model=List[AdData])
+@app.get("/api/ads")
 async def get_ads(
     campaign_id: Optional[int] = None,
     ad_group_id: Optional[int] = None,
-    days: int = Query(7, ge=1, le=90)
+    days: int = Query(7, ge=1, le=90),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
 ):
-    """Get product ads (creatives/ASIN level) with performance data"""
+    """Get product ads with performance data (paginated)"""
     try:
         with db_connector.get_connection() as conn:
             import psycopg2.extras
@@ -3717,19 +3962,25 @@ async def get_ads(
                         inventory_status=inventory_status
                     ))
                 
-                return result
+                total = len(result)
+                total_pages = max(1, (total + page_size - 1) // page_size)
+                start_idx = (page - 1) * page_size
+                end_idx = start_idx + page_size
+                return {"data": result[start_idx:end_idx], "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
     except Exception as e:
         logger.error(f"Error fetching ads: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/search-terms", response_model=List[SearchTermData])
+@app.get("/api/search-terms")
 async def get_search_terms(
     campaign_id: Optional[int] = None,
     ad_group_id: Optional[int] = None,
     days: int = Query(7, ge=1, le=90),
     min_clicks: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000)
+    limit: int = Query(200, ge=1, le=2000),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
 ):
     """Get search terms (customer queries) with performance"""
     try:
@@ -3806,7 +4057,11 @@ async def get_search_terms(
                         harvest_action=harvest_action
                     ))
                 
-                return result
+                total = len(result)
+                total_pages = max(1, (total + page_size - 1) // page_size)
+                start_idx = (page - 1) * page_size
+                end_idx = start_idx + page_size
+                return {"data": result[start_idx:end_idx], "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
     except Exception as e:
         logger.error(f"Error fetching search terms: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4142,6 +4397,7 @@ async def add_search_term_as_keyword(
 ):
     """Add a search term as a keyword to a campaign/ad group
     
+    Creates the keyword in both the local database and Amazon Ads API.
     Requires: admin, manager, or specialist role
     """
     try:
@@ -4151,25 +4407,96 @@ async def add_search_term_as_keyword(
         
         logger.info(f"Adding search term '{search_term}' as {match_type} keyword to campaign {campaign_id}, ad group {ad_group_id} by {current_user.email}")
         
+        # Determine bid — use provided bid or look up the ad group default
+        keyword_bid = bid
+        if keyword_bid is None:
+            try:
+                with db_connector.get_connection() as conn:
+                    import psycopg2.extras
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                        cursor.execute("""
+                            SELECT default_bid FROM ad_groups WHERE ad_group_id = %s
+                        """, (ad_group_id,))
+                        ag = cursor.fetchone()
+                        if ag and ag.get('default_bid'):
+                            keyword_bid = float(ag['default_bid'])
+            except Exception:
+                pass
+            if keyword_bid is None:
+                keyword_bid = 0.75  # Sensible default
+        
+        new_keyword_id = None
+
         with db_connector.get_connection() as conn:
-            with conn.cursor() as cursor:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                # 1. Check if keyword already exists
+                cursor.execute("""
+                    SELECT keyword_id FROM keywords
+                    WHERE keyword_text = %s AND match_type = %s
+                      AND campaign_id = %s AND ad_group_id = %s
+                """, (search_term, match_type.upper(), campaign_id, ad_group_id))
+                existing = cursor.fetchone()
+
+                if existing:
+                    new_keyword_id = existing['keyword_id']
+                    logger.info(f"Keyword '{search_term}' already exists (id={new_keyword_id}), updating bid")
+                    cursor.execute("""
+                        UPDATE keywords SET bid = %s, state = 'ENABLED', updated_at = NOW()
+                        WHERE keyword_id = %s
+                    """, (keyword_bid, new_keyword_id))
+                else:
+                    # Generate a temporary local keyword_id; Amazon will assign the real one on sync
+                    import random
+                    temp_keyword_id = random.randint(9000000000, 9999999999)
+                    cursor.execute("""
+                        INSERT INTO keywords
+                            (keyword_id, keyword_text, match_type, campaign_id, ad_group_id,
+                             bid, state, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, 'ENABLED', NOW(), NOW())
+                    """, (temp_keyword_id, search_term, match_type.upper(),
+                          campaign_id, ad_group_id, keyword_bid))
+                    new_keyword_id = temp_keyword_id
+
+                # 2. Log in change_history
                 cursor.execute("""
                     INSERT INTO change_history 
-                        (entity_type, entity_id, field_name, old_value, new_value, 
+                        (entity_type, entity_id, entity_name, field_name, old_value, new_value, 
                          change_type, triggered_by, reason)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    'keyword', ad_group_id, 'keyword_text',
+                    'keyword', new_keyword_id or ad_group_id, search_term, 'keyword_text',
                     '', search_term,
-                    'create', f'search_term_harvesting:{current_user.email}',
-                    f'Added from search term harvesting by {current_user.email}: {search_term}'
+                    'create', f'dashboard_manual:{current_user.email}',
+                    f'Added from search term harvesting by {current_user.email}: {search_term} ({match_type})'
                 ))
                 conn.commit()
         
+        # 3. Sync to Amazon Ads API
+        sync_manager = _get_amazon_sync_manager()
+        if sync_manager:
+            try:
+                sync_manager.create_keywords([{
+                    'campaign_id': campaign_id,
+                    'ad_group_id': ad_group_id,
+                    'keyword_text': search_term,
+                    'match_type': match_type.upper(),
+                    'bid': keyword_bid,
+                    'state': 'ENABLED',
+                }])
+                logger.info(f"Keyword synced to Amazon: '{search_term}' ({match_type})")
+            except Exception as sync_err:
+                logger.error(f"Amazon sync failed for keyword '{search_term}': {sync_err}")
+        else:
+            logger.warning(f"Amazon sync skipped for keyword '{search_term}': sync manager unavailable")
+        
         return {
             "status": "success",
-            "message": f"Search term '{search_term}' added as {match_type} keyword"
+            "message": f"Search term '{search_term}' added as {match_type} keyword",
+            "keyword_id": new_keyword_id
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error adding search term as keyword: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4185,6 +4512,7 @@ async def add_search_term_as_negative(
 ):
     """Add a search term as a negative keyword
     
+    Creates the negative keyword in both the local database and Amazon Ads API.
     Requires: admin, manager, or specialist role
     """
     try:
@@ -4196,23 +4524,54 @@ async def add_search_term_as_negative(
         
         with db_connector.get_connection() as conn:
             with conn.cursor() as cursor:
+                # 1. Record in negative_keyword_history
+                cursor.execute("""
+                    INSERT INTO negative_keyword_history
+                        (keyword_id, keyword_text, match_type, campaign_id, ad_group_id,
+                         marked_negative_date, reason, status)
+                    VALUES (0, %s, %s, %s, %s, NOW(), %s, 'active')
+                """, (
+                    search_term, match_type, campaign_id, ad_group_id,
+                    f'Added as negative from search term harvesting by {current_user.email}'
+                ))
+
+                # 2. Log in change_history
                 cursor.execute("""
                     INSERT INTO change_history 
-                        (entity_type, entity_id, field_name, old_value, new_value, 
+                        (entity_type, entity_id, entity_name, field_name, old_value, new_value, 
                          change_type, triggered_by, reason)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    'negative_keyword', ad_group_id, 'keyword_text',
+                    'negative_keyword', ad_group_id, search_term, 'keyword_text',
                     '', search_term,
-                    'create', 'search_term_harvesting',
-                    f'Added as negative from search term harvesting: {search_term} (Clicks > 15, Orders = 0)'
+                    'create', f'dashboard_manual:{current_user.email}',
+                    f'Added as negative from search term harvesting by {current_user.email}: {search_term} ({match_type})'
                 ))
                 conn.commit()
+        
+        # 3. Sync to Amazon Ads API
+        sync_manager = _get_amazon_sync_manager()
+        if sync_manager:
+            try:
+                sync_manager.create_negative_keywords([{
+                    'campaign_id': campaign_id,
+                    'ad_group_id': ad_group_id,
+                    'keyword_text': search_term,
+                    'match_type': match_type.upper(),
+                    'state': 'ENABLED',
+                }])
+                logger.info(f"Negative keyword synced to Amazon: '{search_term}' ({match_type})")
+            except Exception as sync_err:
+                logger.error(f"Amazon sync failed for negative keyword '{search_term}': {sync_err}")
+        else:
+            logger.warning(f"Amazon sync skipped for negative keyword '{search_term}': sync manager unavailable")
         
         return {
             "status": "success",
             "message": f"Search term '{search_term}' added as {match_type} negative keyword"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error adding search term as negative: {e}")
         raise HTTPException(status_code=500, detail=str(e))

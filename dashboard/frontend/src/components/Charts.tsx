@@ -15,6 +15,9 @@ import {
   Legend,
   ResponsiveContainer,
   ComposedChart,
+  PieChart as RePieChart,
+  Pie,
+  Cell,
 } from 'recharts';
 import { formatCurrency } from '@/utils/helpers';
 
@@ -311,3 +314,248 @@ export function HealthGauge({ value, size = 120, className }: GaugeProps) {
   );
 }
 
+// ============================================================================
+// DONUT CHART — for distributions (severity, status, type)
+// ============================================================================
+
+const DONUT_COLORS = ['#FF9900', '#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
+
+interface DonutChartProps {
+  data: Array<{ name: string; value: number; color?: string }>;
+  height?: number;
+  innerRadius?: number;
+  outerRadius?: number;
+  className?: string;
+  centerLabel?: string;
+  centerValue?: string | number;
+}
+
+export function DonutChart({
+  data,
+  height = 200,
+  innerRadius = 50,
+  outerRadius = 75,
+  className,
+  centerLabel,
+  centerValue,
+}: DonutChartProps) {
+  const filteredData = data.filter(d => d.value > 0);
+
+  return (
+    <div className={className} style={{ position: 'relative' }}>
+      <ResponsiveContainer width="100%" height={height}>
+        <RePieChart>
+          <Pie
+            data={filteredData}
+            cx="50%"
+            cy="50%"
+            innerRadius={innerRadius}
+            outerRadius={outerRadius}
+            paddingAngle={2}
+            dataKey="value"
+            stroke="none"
+          >
+            {filteredData.map((entry, index) => (
+              <Cell
+                key={`cell-${index}`}
+                fill={entry.color || DONUT_COLORS[index % DONUT_COLORS.length]}
+              />
+            ))}
+          </Pie>
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const item = payload[0];
+              return (
+                <div className="custom-tooltip">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    {item.name}: {item.value}
+                  </p>
+                </div>
+              );
+            }}
+          />
+        </RePieChart>
+      </ResponsiveContainer>
+      {centerLabel && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <span className="text-lg font-bold text-gray-900 dark:text-white">{centerValue}</span>
+          <span className="text-[10px] text-gray-500 dark:text-gray-400">{centerLabel}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// MINI AREA CHART — compact chart for stat cards
+// ============================================================================
+
+interface MiniAreaChartProps {
+  data: number[];
+  color?: string;
+  height?: number;
+  className?: string;
+}
+
+export function MiniAreaChart({
+  data,
+  color = '#FF9900',
+  height = 50,
+  className,
+}: MiniAreaChartProps) {
+  const chartData = data.map((value, index) => ({ value, index }));
+  const gradientId = `miniArea-${color.replace('#', '')}`;
+
+  return (
+    <div className={className}>
+      <ResponsiveContainer width="100%" height={height}>
+        <AreaChart data={chartData} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+              <stop offset="95%" stopColor={color} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke={color}
+            fill={`url(#${gradientId})`}
+            strokeWidth={1.5}
+            dot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ============================================================================
+// SIMPLE BAR CHART — vertical bars for activity frequency
+// ============================================================================
+
+interface SimpleBarChartProps {
+  data: Array<{ label: string; value: number; color?: string }>;
+  height?: number;
+  className?: string;
+  barColor?: string;
+  valueFormatter?: (value: number) => string;
+}
+
+export function SimpleBarChart({
+  data,
+  height = 200,
+  className,
+  barColor = '#FF9900',
+  valueFormatter,
+}: SimpleBarChartProps) {
+  return (
+    <div className={className}>
+      <ResponsiveContainer width="100%" height={height}>
+        <BarChart data={data} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#30363D" vertical={false} />
+          <XAxis
+            dataKey="label"
+            stroke="#8B949E"
+            tick={{ fill: '#8B949E', fontSize: 10 }}
+            axisLine={{ stroke: '#30363D' }}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            stroke="#8B949E"
+            tick={{ fill: '#8B949E', fontSize: 10 }}
+            axisLine={{ stroke: '#30363D' }}
+            tickFormatter={valueFormatter}
+            width={40}
+          />
+          <Tooltip
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              return (
+                <div className="custom-tooltip">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">{label}</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    {valueFormatter ? valueFormatter(payload[0].value as number) : payload[0].value}
+                  </p>
+                </div>
+              );
+            }}
+          />
+          <Bar dataKey="value" fill={barColor} radius={[3, 3, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ============================================================================
+// DUAL LINE CHART — two metrics on same axis (e.g., ACOS vs TACoS)
+// ============================================================================
+
+interface DualLineChartProps {
+  data: Array<{ label: string; line1: number; line2: number }>;
+  line1Name?: string;
+  line2Name?: string;
+  line1Color?: string;
+  line2Color?: string;
+  height?: number;
+  className?: string;
+  yAxisFormatter?: (value: number) => string;
+}
+
+export function DualLineChart({
+  data,
+  line1Name = 'Line 1',
+  line2Name = 'Line 2',
+  line1Color = '#FF9900',
+  line2Color = '#3B82F6',
+  height = 200,
+  className,
+  yAxisFormatter,
+}: DualLineChartProps) {
+  return (
+    <div className={className}>
+      <ResponsiveContainer width="100%" height={height}>
+        <LineChart data={data} margin={{ top: 5, right: 10, left: 5, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#30363D" />
+          <XAxis
+            dataKey="label"
+            stroke="#8B949E"
+            tick={{ fill: '#8B949E', fontSize: 10 }}
+            axisLine={{ stroke: '#30363D' }}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            stroke="#8B949E"
+            tick={{ fill: '#8B949E', fontSize: 10 }}
+            axisLine={{ stroke: '#30363D' }}
+            tickFormatter={yAxisFormatter}
+            width={45}
+          />
+          <Tooltip content={<CustomTooltip />} />
+          <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+          <Line
+            type="monotone"
+            dataKey="line1"
+            name={line1Name}
+            stroke={line1Color}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4 }}
+          />
+          <Line
+            type="monotone"
+            dataKey="line2"
+            name={line2Name}
+            stroke={line2Color}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4 }}
+            strokeDasharray="5 5"
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}

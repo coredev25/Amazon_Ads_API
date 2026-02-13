@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import {
   Settings,
   Save,
@@ -39,6 +40,7 @@ import { cn, formatPercentage, formatCurrency, formatRelativeTime } from '@/util
 
 export default function AIControlPage() {
   const queryClient = useQueryClient();
+  const toast = useToast();
   
   const { data: currentConfig, isLoading: configLoading } = useQuery({
     queryKey: ['ai-control-config'],
@@ -72,7 +74,11 @@ export default function AIControlPage() {
   const updateMutation = useMutation({
     mutationFn: updateAIControlConfig,
     onSuccess: () => {
+      toast.success('AI Config Saved', 'AI control settings have been updated');
       queryClient.invalidateQueries({ queryKey: ['ai-control-config'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Save Failed', error.message);
     },
   });
 

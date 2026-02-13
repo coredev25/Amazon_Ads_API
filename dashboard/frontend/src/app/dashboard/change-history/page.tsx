@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import {
   History,
   Filter,
@@ -15,11 +16,13 @@ import {
 } from 'lucide-react';
 import SmartGrid from '@/components/SmartGrid';
 import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
-import { fetchChangeHistory, type ChangeHistoryEntry } from '@/utils/api';
+import { DonutChart } from '@/components/Charts';
+import { fetchChangeHistory, revertChange, type ChangeHistoryEntry } from '@/utils/api';
 import { formatRelativeTime, cn } from '@/utils/helpers';
 import { exportTableToPDF } from '@/utils/pdfExport';
 
 export default function ChangeHistoryPage() {
+  const toast = useToast();
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>('all');
   const [dateRange, setDateRange] = useState<DateRange>({
     type: 'last_30_days',
@@ -39,17 +42,35 @@ export default function ChangeHistoryPage() {
 
   const undoMutation = useMutation({
     mutationFn: async (entry: ChangeHistoryEntry) => {
-      // This would call an API endpoint to undo the change
-      // For now, we'll just log it
-      console.log('Undoing change:', entry);
-      return { success: true };
+      return await revertChange(entry.id);
     },
     onSuccess: () => {
+      toast.success('Change Reverted', 'The change has been successfully undone');
       queryClient.invalidateQueries({ queryKey: ['change-history'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Undo Failed', error.message);
     },
   });
 
   const filteredHistory = history?.filter((entry) => {
+    // Date range filter
+    if (dateRange.startDate || dateRange.endDate) {
+      const changeDate = new Date(entry.change_date);
+      if (dateRange.startDate && changeDate < dateRange.startDate) return false;
+      if (dateRange.endDate) {
+        const endOfDay = new Date(dateRange.endDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        if (changeDate > endOfDay) return false;
+      }
+    } else if (dateRange.days) {
+      const changeDate = new Date(entry.change_date);
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - dateRange.days);
+      if (changeDate < cutoff) return false;
+    }
+
+    // Search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       return (
@@ -162,17 +183,17 @@ export default function ChangeHistoryPage() {
         </div>
       </div>
 
-      {/* Summary Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card p-4">
+      {/* Summary Stats + Entity Distribution */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-400">Total Changes</p>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
+          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1 tabular-nums">
             {history?.length || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-400">Today</p>
-          <p className="text-2xl font-bold text-green-400 mt-1">
+          <p className="text-2xl font-bold text-green-400 mt-1 tabular-nums">
             {history?.filter(h => {
               const changeDate = new Date(h.change_date);
               const today = new Date();
@@ -180,9 +201,9 @@ export default function ChangeHistoryPage() {
             }).length || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-400">This Week</p>
-          <p className="text-2xl font-bold text-blue-400 mt-1">
+          <p className="text-2xl font-bold text-blue-400 mt-1 tabular-nums">
             {history?.filter(h => {
               const changeDate = new Date(h.change_date);
               const weekAgo = new Date();
@@ -191,12 +212,42 @@ export default function ChangeHistoryPage() {
             }).length || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-400">Manual Changes</p>
-          <p className="text-2xl font-bold text-amazon-orange mt-1">
+          <p className="text-2xl font-bold text-amazon-orange mt-1 tabular-nums">
             {history?.filter(h => h.triggered_by === 'manual' || h.triggered_by === 'dashboard_manual').length || 0}
           </p>
         </div>
+        {/* Entity type chart */}
+        {history && history.length > 0 && (
+          <div className="card p-4 flex items-center gap-3 hover-lift">
+            <DonutChart
+              data={(() => {
+                const counts: Record<string, number> = {};
+                history.forEach(h => { counts[h.entity_type] = (counts[h.entity_type] || 0) + 1; });
+                const colors: Record<string, string> = { campaign: '#FF9900', keyword: '#3B82F6', ad_group: '#10B981', negative_keyword: '#EF4444' };
+                return Object.entries(counts).map(([name, value]) => ({ name, value, color: colors[name] || '#8B5CF6' }));
+              })()}
+              height={80}
+              innerRadius={20}
+              outerRadius={35}
+            />
+            <div className="space-y-1">
+              {(() => {
+                const counts: Record<string, number> = {};
+                (history || []).forEach(h => { counts[h.entity_type] = (counts[h.entity_type] || 0) + 1; });
+                const colors: Record<string, string> = { campaign: 'bg-amazon-orange', keyword: 'bg-blue-500', ad_group: 'bg-green-500', negative_keyword: 'bg-red-500' };
+                return Object.entries(counts).slice(0, 4).map(([type, count]) => (
+                  <div key={type} className="flex items-center gap-1.5 text-[10px]">
+                    <div className={cn('w-2 h-2 rounded-full', colors[type] || 'bg-purple-500')} />
+                    <span className="text-gray-500 capitalize">{type.replace('_', ' ')}</span>
+                    <span className="font-bold text-gray-900 dark:text-white tabular-nums">{count}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Change History Table */}

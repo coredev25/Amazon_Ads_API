@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import {
   Ban,
   Check,
@@ -15,6 +16,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import SmartGrid from '@/components/SmartGrid';
+import { DonutChart } from '@/components/Charts';
 import {
   fetchNegativeCandidates,
   approveNegativeKeyword,
@@ -31,6 +33,7 @@ import {
 } from '@/utils/helpers';
 
 export default function NegativesPage() {
+  const toast = useToast();
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('pending');
   
@@ -45,22 +48,34 @@ export default function NegativesPage() {
     mutationFn: ({ keywordId, matchType }: { keywordId: number; matchType: string }) =>
       approveNegativeKeyword(keywordId, matchType),
     onSuccess: () => {
+      toast.success('Negative Keyword Added', 'Keyword added as negative and synced to Amazon');
       queryClient.invalidateQueries({ queryKey: ['negative-candidates'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Approval Failed', error.message);
     },
   });
 
   const rejectMutation = useMutation({
     mutationFn: (keywordId: number) => rejectNegativeKeyword(keywordId),
     onSuccess: () => {
+      toast.info('Candidate Rejected', 'Negative keyword candidate dismissed');
       queryClient.invalidateQueries({ queryKey: ['negative-candidates'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Rejection Failed', error.message);
     },
   });
 
   const holdMutation = useMutation({
     mutationFn: ({ keywordId, days }: { keywordId: number; days: number }) =>
       holdNegativeKeyword(keywordId, days),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      toast.info('Put on Hold', `Keyword placed on ${variables.days}-day hold for review`);
       queryClient.invalidateQueries({ queryKey: ['negative-candidates'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Hold Failed', error.message);
     },
   });
 
@@ -95,7 +110,7 @@ export default function NegativesPage() {
       sortable: true,
       render: (value: unknown, row: NegativeCandidate) => (
         <div className="max-w-xs">
-          <p className="font-medium text-gray-900 dark:text-white truncate">{row.keyword_text}</p>
+          <p className="font-medium truncate"><span className="entity-link">{row.keyword_text}</span></p>
           {row.search_term && (
             <p className="text-xs text-gray-400 truncate">Term: {row.search_term}</p>
           )}
@@ -263,73 +278,112 @@ export default function NegativesPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div className="card p-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 stagger-animation">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-red-500/20 text-red-400">
               <DollarSign className="w-5 h-5" />
             </div>
             <div>
               <p className="text-sm text-gray-400">Wasted Spend</p>
-              <p className="text-xl font-bold text-red-400">
+              <p className="text-xl font-bold text-red-400 tabular-nums">
                 {formatCurrency(totalWastedSpend)}
               </p>
             </div>
           </div>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-green-500/20 text-green-400">
               <DollarSign className="w-5 h-5" />
             </div>
             <div>
               <p className="text-sm text-gray-400">Potential Savings</p>
-              <p className="text-xl font-bold text-green-400">
+              <p className="text-xl font-bold text-green-400 tabular-nums">
                 {formatCurrency(potentialSavings)}
               </p>
             </div>
           </div>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-orange-500/20 text-orange-400">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
               <p className="text-sm text-gray-400">Candidates Found</p>
-              <p className="text-xl font-bold text-gray-900 dark:text-white">
+              <p className="text-xl font-bold text-gray-900 dark:text-white tabular-nums">
                 {candidates?.length || 0}
               </p>
             </div>
           </div>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-red-500/20 text-red-400">
               <Ban className="w-5 h-5" />
             </div>
             <div>
               <p className="text-sm text-gray-400">Critical</p>
-              <p className="text-xl font-bold text-red-400">
+              <p className="text-xl font-bold text-red-400 tabular-nums">
                 {candidates?.filter((c) => c.severity === 'critical').length || 0}
               </p>
             </div>
           </div>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-yellow-500/20 text-yellow-400">
               <MousePointerClick className="w-5 h-5" />
             </div>
             <div>
               <p className="text-sm text-gray-400">Zero Orders</p>
-              <p className="text-xl font-bold text-yellow-400">
+              <p className="text-xl font-bold text-yellow-400 tabular-nums">
                 {candidates?.filter((c) => c.orders === 0).length || 0}
               </p>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Severity Distribution Chart */}
+      {candidates && candidates.length > 0 && (
+        <div className="card p-6 animate-fade-in-up">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Severity Distribution</h3>
+          <div className="flex items-center gap-8">
+            <DonutChart
+              data={[
+                { name: 'Critical', value: candidates.filter(c => c.severity === 'critical').length, color: '#EF4444' },
+                { name: 'High', value: candidates.filter(c => c.severity === 'high').length, color: '#F97316' },
+                { name: 'Medium', value: candidates.filter(c => c.severity === 'medium').length, color: '#F59E0B' },
+                { name: 'Low', value: candidates.filter(c => c.severity === 'low').length, color: '#6B7280' },
+              ]}
+              height={160}
+              innerRadius={40}
+              outerRadius={65}
+              centerLabel="Total"
+              centerValue={String(candidates.length)}
+            />
+            <div className="flex-1 grid grid-cols-2 gap-3">
+              {[
+                { label: 'Critical', count: candidates.filter(c => c.severity === 'critical').length, spend: candidates.filter(c => c.severity === 'critical').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-red-500', text: 'text-red-500' },
+                { label: 'High', count: candidates.filter(c => c.severity === 'high').length, spend: candidates.filter(c => c.severity === 'high').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-orange-500', text: 'text-orange-500' },
+                { label: 'Medium', count: candidates.filter(c => c.severity === 'medium').length, spend: candidates.filter(c => c.severity === 'medium').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-amber-500', text: 'text-amber-500' },
+                { label: 'Low', count: candidates.filter(c => c.severity === 'low').length, spend: candidates.filter(c => c.severity === 'low').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-gray-500', text: 'text-gray-500' },
+              ].map(item => (
+                <div key={item.label} className="card p-3 hover-glow">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className={cn('w-2.5 h-2.5 rounded-full', item.color)} />
+                    <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{item.label}</span>
+                    <span className={cn('text-xs font-bold ml-auto', item.text)}>{item.count}</span>
+                  </div>
+                  <p className="text-[10px] text-gray-400">Wasted: {formatCurrency(item.spend)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Info Banner */}
       <div className="alert alert-info">

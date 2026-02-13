@@ -384,6 +384,120 @@ class AmazonSPAPIClient:
         self.logger.info(f"Campaign budget update response: {response}")
         return response
 
+    def create_keywords(self, keywords: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Create new keywords using Amazon SP API v3
+        
+        Args:
+            keywords: List of keyword dicts with campaign_id, ad_group_id,
+                      keyword_text, match_type, bid, state
+        
+        Returns:
+            Create response from Amazon API
+            
+        Endpoint: POST /sp/keywords
+        """
+        endpoint = '/sp/keywords'
+        
+        formatted = []
+        for kw in keywords:
+            kw_data = {
+                'campaignId': str(kw['campaign_id']),
+                'adGroupId': str(kw['ad_group_id']),
+                'keywordText': kw['keyword_text'],
+                'matchType': kw.get('match_type', 'BROAD').upper(),
+                'state': kw.get('state', 'ENABLED').upper(),
+            }
+            if kw.get('bid') is not None:
+                kw_data['bid'] = float(kw['bid'])
+            formatted.append(kw_data)
+        
+        request_body = {'keywords': formatted}
+        
+        v3_headers = {
+            'Accept': 'application/vnd.spKeyword.v3+json',
+            'Content-Type': 'application/vnd.spKeyword.v3+json'
+        }
+        
+        self.logger.info(f"Creating {len(formatted)} keywords via SP API v3")
+        
+        response = self._make_request('POST', endpoint, data=request_body, extra_headers=v3_headers)
+        
+        self.logger.info(f"Keyword create response: {response}")
+        return response
+
+    def create_negative_keywords(self, negative_keywords: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Create negative keywords using Amazon SP API v3
+        
+        Args:
+            negative_keywords: List of dicts with campaign_id, ad_group_id,
+                               keyword_text, match_type, state
+        
+        Returns:
+            Create response from Amazon API
+            
+        Endpoint: POST /sp/negativeKeywords
+        """
+        endpoint = '/sp/negativeKeywords'
+        
+        formatted = []
+        for nk in negative_keywords:
+            nk_data = {
+                'campaignId': str(nk['campaign_id']),
+                'adGroupId': str(nk['ad_group_id']),
+                'keywordText': nk['keyword_text'],
+                'matchType': nk.get('match_type', 'NEGATIVE_EXACT').upper(),
+                'state': nk.get('state', 'ENABLED').upper(),
+            }
+            formatted.append(nk_data)
+        
+        request_body = {'negativeKeywords': formatted}
+        
+        v3_headers = {
+            'Accept': 'application/vnd.spNegativeKeyword.v3+json',
+            'Content-Type': 'application/vnd.spNegativeKeyword.v3+json'
+        }
+        
+        self.logger.info(f"Creating {len(formatted)} negative keywords via SP API v3")
+        
+        response = self._make_request('POST', endpoint, data=request_body, extra_headers=v3_headers)
+        
+        self.logger.info(f"Negative keyword create response: {response}")
+        return response
+
+    def update_campaign_state(self, campaign_id: int, state: str) -> Dict[str, Any]:
+        """
+        Update just the campaign state (without budget change)
+        
+        Args:
+            campaign_id: Amazon campaign ID
+            state: New state (ENABLED, PAUSED, ARCHIVED)
+            
+        Returns:
+            Update response from Amazon API
+        """
+        endpoint = '/sp/campaigns'
+        
+        request_body = {
+            'campaigns': [{
+                'campaignId': str(campaign_id),
+                'state': state.upper()
+            }]
+        }
+        
+        v3_headers = {
+            'Accept': 'application/vnd.spCampaign.v3+json',
+            'Content-Type': 'application/vnd.spCampaign.v3+json'
+        }
+        
+        self.logger.info(f"Updating campaign {campaign_id} state to {state} via SP API v3")
+        
+        response = self._make_request('PUT', endpoint, data=request_body, extra_headers=v3_headers)
+        
+        self.logger.info(f"Campaign state update response: {response}")
+        return response
+
 
 class AmazonSyncManager:
     """
@@ -408,7 +522,42 @@ class AmazonSyncManager:
         except Exception as e:
             self.logger.error(f"Failed to initialize Amazon API client: {e}")
             self.api_client = None
-    
+
+    # ------------------------------------------------------------------
+    # Delegation methods — expose AmazonSPAPIClient write operations so
+    # callers can use sync_manager.update_keyword_bids(...) directly.
+    # ------------------------------------------------------------------
+
+    def update_keyword_bids(self, keyword_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Delegate to api_client.update_keyword_bids"""
+        if not self.api_client:
+            raise RuntimeError("Amazon API client not initialized")
+        return self.api_client.update_keyword_bids(keyword_updates)
+
+    def update_campaign_budgets(self, campaign_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Delegate to api_client.update_campaign_budgets"""
+        if not self.api_client:
+            raise RuntimeError("Amazon API client not initialized")
+        return self.api_client.update_campaign_budgets(campaign_updates)
+
+    def create_keywords(self, keywords: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Delegate to api_client.create_keywords"""
+        if not self.api_client:
+            raise RuntimeError("Amazon API client not initialized")
+        return self.api_client.create_keywords(keywords)
+
+    def create_negative_keywords(self, negative_keywords: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Delegate to api_client.create_negative_keywords"""
+        if not self.api_client:
+            raise RuntimeError("Amazon API client not initialized")
+        return self.api_client.create_negative_keywords(negative_keywords)
+
+    def update_campaign_state(self, campaign_id: int, state: str) -> Dict[str, Any]:
+        """Delegate to api_client.update_campaign_state"""
+        if not self.api_client:
+            raise RuntimeError("Amazon API client not initialized")
+        return self.api_client.update_campaign_state(campaign_id, state)
+
     def download_yesterday_performance(self) -> SyncResult:
         """
         Download performance data for yesterday (T-1) from Amazon SP-API

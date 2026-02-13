@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import {
   Filter,
   Download,
@@ -28,6 +29,7 @@ import {
 } from '@/utils/helpers';
 
 export default function KeywordsPage() {
+  const toast = useToast();
   const [dateRange, setDateRange] = useState<DateRange>({
     type: 'last_7_days',
     days: 7,
@@ -37,39 +39,64 @@ export default function KeywordsPage() {
   const [editingKeyword, setEditingKeyword] = useState<number | null>(null);
   const [editBidValue, setEditBidValue] = useState<string>('');
   const [lockingKeyword, setLockingKeyword] = useState<number | null>(null);
-  
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
   const queryClient = useQueryClient();
+
+  // Reset to page 1 when date range changes
+  useEffect(() => {
+    setPage(1);
+  }, [dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString()]);
 
   // Calculate days from dateRange
   const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
 
-  const { data: keywords, isLoading, refetch } = useQuery({
-    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString()],
-    queryFn: () => fetchKeywords({ days, limit: 200 }),
+  const { data: keywordsResponse, isLoading, refetch } = useQuery({
+    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), page, pageSize],
+    queryFn: () => fetchKeywords({ days, page, page_size: pageSize }),
   });
+
+  const keywords = keywordsResponse?.data;
+
+  // Note: auto-refresh is handled via Layout's LiveSettings context for nav badges
 
   const bidMutation = useMutation({
     mutationFn: ({ keywordId, newBid, oldBid }: { keywordId: number; newBid: number; oldBid: number }) =>
       updateKeywordBid(keywordId, { new_value: newBid, old_value: oldBid }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      toast.success('Bid Updated', `Keyword bid changed to $${variables.newBid.toFixed(2)}`, {
+        amazonSynced: (_data as Record<string, unknown>)?.amazon_synced as boolean | undefined,
+      });
       queryClient.invalidateQueries({ queryKey: ['keywords'] });
       setEditingKeyword(null);
+    },
+    onError: (error: Error) => {
+      toast.error('Bid Update Failed', error.message);
     },
   });
 
   const lockMutation = useMutation({
     mutationFn: ({ keywordId, days }: { keywordId: number; days: number }) =>
       lockKeywordBid(keywordId, days, 'Manual lock from dashboard'),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      toast.success('Keyword Locked', `Bid locked for ${variables.days} days`);
       queryClient.invalidateQueries({ queryKey: ['keywords'] });
       setLockingKeyword(null);
+    },
+    onError: (error: Error) => {
+      toast.error('Lock Failed', error.message);
     },
   });
 
   const unlockMutation = useMutation({
     mutationFn: (keywordId: number) => unlockKeywordBid(keywordId),
     onSuccess: () => {
+      toast.success('Keyword Unlocked', 'Bid is now open for AI optimization');
       queryClient.invalidateQueries({ queryKey: ['keywords'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Unlock Failed', error.message);
     },
   });
 
@@ -81,11 +108,11 @@ export default function KeywordsPage() {
 
   const handleEditBid = (keyword: Keyword) => {
     if (keyword.is_locked) {
-      alert(`This keyword is locked: ${keyword.lock_reason}`);
+      toast.warning('Keyword Locked', `This keyword is locked: ${keyword.lock_reason}`);
       return;
     }
     setEditingKeyword(keyword.keyword_id);
-    setEditBidValue(keyword.bid.toFixed(2));
+    setEditBidValue((keyword.bid ?? 0).toFixed(2));
   };
 
   const handleSaveBid = (keyword: Keyword) => {
@@ -423,31 +450,31 @@ export default function KeywordsPage() {
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div className="card p-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 stagger-animation">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-600 dark:text-gray-400">Total Keywords</p>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
-            {keywords?.length || 0}
+          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1 tabular-nums">
+            {keywordsResponse?.total ?? 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-600 dark:text-gray-400">With AI Suggestions</p>
-          <p className="text-2xl font-bold text-amazon-orange mt-1">
+          <p className="text-2xl font-bold text-amazon-orange mt-1 tabular-nums">
             {keywords?.filter((k) => k.ai_suggested_bid).length || 0}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <div className="flex items-center gap-2">
             <Lock className="w-4 h-4 text-amber-400" />
             <p className="text-sm text-gray-400">Locked</p>
           </div>
-          <p className="text-2xl font-bold text-amber-400 mt-1">
+          <p className="text-2xl font-bold text-amber-400 mt-1 tabular-nums">
             {lockedCount}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-400">Avg. Bid</p>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
+          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1 tabular-nums">
             {formatCurrency(
               keywords?.length
                 ? keywords.reduce((sum, k) => sum + k.bid, 0) / keywords.length
@@ -455,9 +482,9 @@ export default function KeywordsPage() {
             )}
           </p>
         </div>
-        <div className="card p-4">
+        <div className="card p-4 hover-lift">
           <p className="text-sm text-gray-400">Total Spend</p>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
+          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1 tabular-nums">
             {formatCurrency(keywords?.reduce((sum, k) => sum + k.spend, 0) || 0)}
           </p>
         </div>
@@ -482,6 +509,21 @@ export default function KeywordsPage() {
         loading={isLoading}
         emptyMessage="No keywords found"
         className="[&_tbody_tr]:group"
+        pagination={
+          keywordsResponse
+            ? {
+                page: keywordsResponse.page,
+                pageSize: keywordsResponse.page_size,
+                total: keywordsResponse.total,
+                totalPages: keywordsResponse.total_pages,
+              }
+            : undefined
+        }
+        onPageChange={setPage}
+        onPageSizeChange={(newSize) => {
+          setPageSize(newSize);
+          setPage(1);
+        }}
         onCellEdit={async (row, column, newValue) => {
           if (column === 'bid') {
             await updateKeywordBid((row as Keyword).keyword_id, {

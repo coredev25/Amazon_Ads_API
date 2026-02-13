@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import {
   Check,
   X,
@@ -17,6 +18,7 @@ import {
   XCircle,
   AlertTriangle,
 } from 'lucide-react';
+import { DonutChart } from '@/components/Charts';
 import {
   fetchRecommendations,
   approveRecommendation,
@@ -34,6 +36,7 @@ import {
 } from '@/utils/helpers';
 
 export default function RecommendationsPage() {
+  const toast = useToast();
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [selectedRecs, setSelectedRecs] = useState<Set<string>>(new Set());
@@ -48,22 +51,34 @@ export default function RecommendationsPage() {
   const approveMutation = useMutation({
     mutationFn: approveRecommendation,
     onSuccess: () => {
+      toast.success('Recommendation Approved', 'Change has been applied and synced to Amazon');
       queryClient.invalidateQueries({ queryKey: ['recommendations'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Approval Failed', error.message);
     },
   });
 
   const rejectMutation = useMutation({
     mutationFn: (id: string) => rejectRecommendation(id),
     onSuccess: () => {
+      toast.info('Recommendation Rejected', 'The recommendation has been dismissed');
       queryClient.invalidateQueries({ queryKey: ['recommendations'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Rejection Failed', error.message);
     },
   });
 
   const bulkApproveMutation = useMutation({
     mutationFn: bulkApproveRecommendations,
     onSuccess: () => {
+      toast.success('Bulk Approved', `${selectedRecs.size} recommendation(s) approved and applied`);
       queryClient.invalidateQueries({ queryKey: ['recommendations'] });
       setSelectedRecs(new Set());
+    },
+    onError: (error: Error) => {
+      toast.error('Bulk Approval Failed', error.message);
     },
   });
 
@@ -142,37 +157,65 @@ export default function RecommendationsPage() {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div className="card p-4">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Total Recommendations</p>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">
-            {recommendations?.length || 0}
-          </p>
+      {/* Summary Cards + Priority Chart */}
+      <div className="grid grid-cols-1 lg:grid-cols-6 gap-4">
+        {/* Priority donut */}
+        <div className="card p-4 lg:col-span-2 flex items-center gap-4 hover-lift animate-fade-in-up">
+          <DonutChart
+            data={[
+              { name: 'Critical', value: priorityCounts.critical || 0, color: '#EF4444' },
+              { name: 'High', value: priorityCounts.high || 0, color: '#F97316' },
+              { name: 'Medium', value: priorityCounts.medium || 0, color: '#F59E0B' },
+              { name: 'Low', value: priorityCounts.low || 0, color: '#6B7280' },
+            ]}
+            height={120}
+            innerRadius={30}
+            outerRadius={50}
+            centerLabel="Total"
+            centerValue={String(recommendations?.length || 0)}
+          />
+          <div className="space-y-2">
+            {[
+              { label: 'Critical', count: priorityCounts.critical || 0, color: 'bg-red-500' },
+              { label: 'High', count: priorityCounts.high || 0, color: 'bg-orange-500' },
+              { label: 'Medium', count: priorityCounts.medium || 0, color: 'bg-amber-500' },
+              { label: 'Low', count: priorityCounts.low || 0, color: 'bg-gray-500' },
+            ].map(item => (
+              <div key={item.label} className="flex items-center gap-2 text-xs">
+                <div className={cn('w-2 h-2 rounded-full', item.color)} />
+                <span className="text-gray-600 dark:text-gray-400 w-12">{item.label}</span>
+                <span className="font-bold text-gray-900 dark:text-white tabular-nums">{item.count}</span>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="card p-4 border-l-2 border-red-500">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Critical</p>
-          <p className="text-2xl font-bold text-red-600 dark:text-red-400 mt-1">
-            {priorityCounts.critical || 0}
-          </p>
-        </div>
-        <div className="card p-4 border-l-2 border-orange-500">
-          <p className="text-sm text-gray-600 dark:text-gray-400">High</p>
-          <p className="text-2xl font-bold text-orange-600 dark:text-orange-400 mt-1">
-            {priorityCounts.high || 0}
-          </p>
-        </div>
-        <div className="card p-4 border-l-2 border-yellow-500">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Medium</p>
-          <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-500 mt-1">
-            {priorityCounts.medium || 0}
-          </p>
-        </div>
-        <div className="card p-4 border-l-2 border-gray-500">
-          <p className="text-sm text-gray-600 dark:text-gray-400">Low</p>
-          <p className="text-2xl font-bold text-gray-600 dark:text-gray-400 mt-1">
-            {priorityCounts.low || 0}
-          </p>
+
+        {/* Summary stats */}
+        <div className="lg:col-span-4 grid grid-cols-2 md:grid-cols-4 gap-4 stagger-animation">
+          <div className="card p-4 border-l-2 border-red-500 hover-lift">
+            <p className="text-sm text-gray-600 dark:text-gray-400">Critical</p>
+            <p className="text-2xl font-bold text-red-600 dark:text-red-400 mt-1 tabular-nums">
+              {priorityCounts.critical || 0}
+            </p>
+          </div>
+          <div className="card p-4 border-l-2 border-orange-500 hover-lift">
+            <p className="text-sm text-gray-600 dark:text-gray-400">High</p>
+            <p className="text-2xl font-bold text-orange-600 dark:text-orange-400 mt-1 tabular-nums">
+              {priorityCounts.high || 0}
+            </p>
+          </div>
+          <div className="card p-4 border-l-2 border-yellow-500 hover-lift">
+            <p className="text-sm text-gray-600 dark:text-gray-400">Medium</p>
+            <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-500 mt-1 tabular-nums">
+              {priorityCounts.medium || 0}
+            </p>
+          </div>
+          <div className="card p-4 border-l-2 border-gray-500 hover-lift">
+            <p className="text-sm text-gray-600 dark:text-gray-400">Low</p>
+            <p className="text-2xl font-bold text-gray-600 dark:text-gray-400 mt-1 tabular-nums">
+              {priorityCounts.low || 0}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -279,8 +322,13 @@ export default function RecommendationsPage() {
                       {rec.recommendation_type}
                     </span>
                   </div>
-                  <h3 className="font-medium text-gray-900 dark:text-white">
-                    {rec.entity_name}
+                  <h3 className="font-medium">
+                    <span
+                      className="entity-link"
+                      onClick={(e) => { e.stopPropagation(); }}
+                    >
+                      {rec.entity_name}
+                    </span>
                   </h3>
                   <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                     {rec.reason}

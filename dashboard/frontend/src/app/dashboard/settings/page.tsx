@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import Link from 'next/link';
 import {
   Settings,
@@ -22,6 +23,7 @@ import { cn, formatPercentage, formatCurrency } from '@/utils/helpers';
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
+  const toast = useToast();
   
   const { data: currentConfig, isLoading } = useQuery({
     queryKey: ['strategy-config'],
@@ -53,7 +55,11 @@ export default function SettingsPage() {
   const updateMutation = useMutation({
     mutationFn: updateStrategyConfig,
     onSuccess: () => {
+      toast.success('Strategy Saved', 'Your strategy configuration has been updated');
       queryClient.invalidateQueries({ queryKey: ['strategy-config'] });
+    },
+    onError: (error: Error) => {
+      toast.error('Save Failed', error.message);
     },
   });
 

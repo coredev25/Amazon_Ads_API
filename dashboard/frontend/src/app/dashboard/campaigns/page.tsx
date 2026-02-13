@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/contexts/ToastContext';
 import {
   Play,
   Pause,
@@ -54,6 +55,7 @@ import {
 } from '@/utils/helpers';
 
 export default function HierarchicalCampaignManager() {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<TabType>('campaigns');
   const [dateRange, setDateRange] = useState<DateRange>({
     type: 'last_7_days',
@@ -63,11 +65,21 @@ export default function HierarchicalCampaignManager() {
   const [selectedAdGroup, setSelectedAdGroup] = useState<{ id: number; name: string } | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [portfolioFilter, setPortfolioFilter] = useState<number | undefined>(undefined);
-  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [selectedRows, setSelectedRows] = useState<Set<string | number>>(new Set());
   const [inventoryStatuses, setInventoryStatuses] = useState<Record<string, any>>({});
   const [showPortfolioModal, setShowPortfolioModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   
+  // Pagination state per tab
+  const [campaignPage, setCampaignPage] = useState(1);
+  const [campaignPageSize, setCampaignPageSize] = useState(50);
+  const [adGroupPage, setAdGroupPage] = useState(1);
+  const [adGroupPageSize, setAdGroupPageSize] = useState(50);
+  const [adsPage, setAdsPage] = useState(1);
+  const [adsPageSize, setAdsPageSize] = useState(50);
+  const [keywordPage, setKeywordPage] = useState(1);
+  const [keywordPageSize, setKeywordPageSize] = useState(50);
+
   const queryClient = useQueryClient();
   const days = dateRange.days || 7;
 
@@ -124,32 +136,39 @@ export default function HierarchicalCampaignManager() {
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
     queryKey: ['portfolios', days],
     queryFn: () => fetchPortfolios(days),
-    enabled: activeTab === 'portfolios',
   });
 
-  const { data: campaigns, isLoading: campaignsLoading } = useQuery({
-    queryKey: ['campaigns', days, portfolioFilter],
-    queryFn: () => fetchCampaigns(days, portfolioFilter),
+  const { data: campaignsResponse, isLoading: campaignsLoading } = useQuery({
+    queryKey: ['campaigns', days, portfolioFilter, campaignPage, campaignPageSize],
+    queryFn: () => fetchCampaigns(days, portfolioFilter, campaignPage, campaignPageSize),
     enabled: activeTab === 'campaigns' || activeTab === 'ad_groups' || activeTab === 'ads' || activeTab === 'keywords' || activeTab === 'targeting' || activeTab === 'search_terms' || activeTab === 'placements',
   });
+  const campaigns = campaignsResponse?.data;
+  const campaignPagination = campaignsResponse ? { page: campaignsResponse.page, pageSize: campaignsResponse.page_size, total: campaignsResponse.total, totalPages: campaignsResponse.total_pages } : undefined;
 
-  const { data: adGroups, isLoading: adGroupsLoading } = useQuery({
-    queryKey: ['ad-groups', selectedCampaign?.id, days],
-    queryFn: () => fetchAdGroups(selectedCampaign?.id, days),
+  const { data: adGroupsResponse, isLoading: adGroupsLoading } = useQuery({
+    queryKey: ['ad-groups', selectedCampaign?.id, days, adGroupPage, adGroupPageSize],
+    queryFn: () => fetchAdGroups(selectedCampaign?.id, days, adGroupPage, adGroupPageSize),
     enabled: activeTab === 'ad_groups' && selectedCampaign !== null,
   });
+  const adGroups = adGroupsResponse?.data;
+  const adGroupPagination = adGroupsResponse ? { page: adGroupsResponse.page, pageSize: adGroupsResponse.page_size, total: adGroupsResponse.total, totalPages: adGroupsResponse.total_pages } : undefined;
 
-  const { data: ads, isLoading: adsLoading } = useQuery({
-    queryKey: ['ads', selectedCampaign?.id, selectedAdGroup?.id, days],
-    queryFn: () => fetchAds(selectedCampaign?.id, selectedAdGroup?.id, days),
+  const { data: adsResponse, isLoading: adsLoading } = useQuery({
+    queryKey: ['ads', selectedCampaign?.id, selectedAdGroup?.id, days, adsPage, adsPageSize],
+    queryFn: () => fetchAds(selectedCampaign?.id, selectedAdGroup?.id, days, adsPage, adsPageSize),
     enabled: activeTab === 'ads' && (selectedCampaign !== null || selectedAdGroup !== null),
   });
+  const ads = adsResponse?.data;
+  const adsPagination = adsResponse ? { page: adsResponse.page, pageSize: adsResponse.page_size, total: adsResponse.total, totalPages: adsResponse.total_pages } : undefined;
 
-  const { data: keywords, isLoading: keywordsLoading } = useQuery({
-    queryKey: ['keywords', selectedAdGroup?.id, days],
-    queryFn: () => fetchKeywords({ ad_group_id: selectedAdGroup?.id, days }),
+  const { data: keywordsResponse, isLoading: keywordsLoading } = useQuery({
+    queryKey: ['keywords', selectedAdGroup?.id, days, keywordPage, keywordPageSize],
+    queryFn: () => fetchKeywords({ ad_group_id: selectedAdGroup?.id, days, page: keywordPage, page_size: keywordPageSize }),
     enabled: activeTab === 'keywords' && selectedAdGroup !== null,
   });
+  const keywords = keywordsResponse?.data;
+  const keywordPagination = keywordsResponse ? { page: keywordsResponse.page, pageSize: keywordsResponse.page_size, total: keywordsResponse.total, totalPages: keywordsResponse.total_pages } : undefined;
 
   const { data: targeting, isLoading: targetingLoading } = useQuery({
     queryKey: ['targeting', selectedAdGroup?.id, days],
@@ -157,11 +176,12 @@ export default function HierarchicalCampaignManager() {
     enabled: activeTab === 'targeting' && selectedAdGroup !== null,
   });
 
-  const { data: searchTerms, isLoading: searchTermsLoading } = useQuery({
+  const { data: searchTermsResponse, isLoading: searchTermsLoading } = useQuery({
     queryKey: ['search-terms', selectedAdGroup?.id, days],
     queryFn: () => fetchSearchTerms(selectedCampaign?.id, selectedAdGroup?.id, days),
     enabled: activeTab === 'search_terms' && selectedAdGroup !== null,
   });
+  const searchTerms = searchTermsResponse?.data;
 
   const { data: placements, isLoading: placementsLoading } = useQuery({
     queryKey: ['placements', selectedCampaign?.id, days],
@@ -212,9 +232,16 @@ export default function HierarchicalCampaignManager() {
       entityId: number;
       action: { action_type: string; new_value: number; old_value?: number; reason?: string };
     }) => applyCampaignAction(entityId, action),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      const actionLabel = variables.action.action_type === 'pause' ? 'Paused' : variables.action.action_type === 'enable' ? 'Enabled' : 'Updated';
+      toast.success(`Campaign ${actionLabel}`, `Campaign ${variables.entityId} has been ${actionLabel.toLowerCase()} successfully`, {
+        amazonSynced: (_data as Record<string, unknown>)?.amazon_synced as boolean | undefined,
+      });
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['ad-groups'] });
+    },
+    onError: (error: Error, variables) => {
+      toast.error('Campaign Action Failed', `Could not ${variables.action.action_type} campaign: ${error.message}`);
     },
   });
 
@@ -643,35 +670,40 @@ export default function HierarchicalCampaignManager() {
             { value: 'archived', label: 'Archived' },
           ]}
           enableSelection
-          selectedRows={selectedRows as unknown as Set<string | number>}
+          selectedRows={selectedRows}
           onSelectRow={(id) => {
+            const strId = String(id);
             const newSelection = new Set(selectedRows);
-            if (newSelection.has(id as number)) {
-              newSelection.delete(id as number);
+            if (newSelection.has(strId)) {
+              newSelection.delete(strId);
             } else {
-              newSelection.add(id as number);
+              newSelection.add(strId);
             }
             setSelectedRows(newSelection);
           }}
           onSelectAllRows={(ids, select) => {
             const newSelection = new Set(selectedRows);
             if (select) {
-              // Select all provided IDs
-              ids.forEach(id => newSelection.add(id as number));
+              ids.forEach(id => newSelection.add(String(id)));
             } else {
-              // Deselect all provided IDs
-              ids.forEach(id => newSelection.delete(id as number));
+              ids.forEach(id => newSelection.delete(String(id)));
             }
             setSelectedRows(newSelection);
           }}
           onBulkAction={async (action, ids, params) => {
-            if (action === 'move_to_portfolio' && params?.portfolioId) {
-              await bulkAddCampaignsToPortfolio(ids.map(id => Number(id)), params.portfolioId);
-            } else if (action === 'pause' || action === 'enable' || action === 'archive') {
-              // Bulk status changes - implement based on your API requirements
-              console.log(`Bulk ${action} action for ${ids.length} campaigns`);
+            try {
+              if (action === 'move_to_portfolio' && params?.portfolioId) {
+                await bulkAddCampaignsToPortfolio(ids.map(id => Number(id)), params.portfolioId);
+                toast.success('Portfolio Updated', `${ids.length} campaign(s) moved to portfolio`);
+              } else if (action === 'pause' || action === 'enable' || action === 'archive') {
+                console.log(`Bulk ${action} action for ${ids.length} campaigns`);
+                toast.info('Bulk Action', `${ids.length} campaign(s) will be ${action}d`);
+              }
+              queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+            } catch (error) {
+              console.error(`Failed to perform bulk ${action}:`, error);
+              toast.error('Bulk Action Failed', `Failed to ${action} ${ids.length} campaigns. Please try again.`);
             }
-            queryClient.invalidateQueries({ queryKey: ['campaigns'] });
           }}
         columns={[
           {
@@ -806,7 +838,7 @@ export default function HierarchicalCampaignManager() {
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowPortfolioModal(true);
-                    setSelectedRows(new Set([row.campaign_id]));
+                    setSelectedRows(new Set([String(row.campaign_id)]));
                   }}
                   className="btn btn-sm btn-secondary"
                   title={row.portfolio_id ? 'Move to Portfolio' : 'Add to Portfolio'}
@@ -820,6 +852,9 @@ export default function HierarchicalCampaignManager() {
         keyField="campaign_id"
         loading={campaignsLoading}
         emptyMessage="No campaigns found"
+        pagination={campaignPagination}
+        onPageChange={(p) => { setCampaignPage(p); setSelectedRows(new Set()); }}
+        onPageSizeChange={(s) => { setCampaignPageSize(s); setCampaignPage(1); setSelectedRows(new Set()); }}
         />
       </div>
     );
@@ -901,6 +936,9 @@ export default function HierarchicalCampaignManager() {
         keyField="ad_group_id"
         loading={adGroupsLoading}
         emptyMessage="No ad groups found"
+        pagination={adGroupPagination}
+        onPageChange={setAdGroupPage}
+        onPageSizeChange={(s) => { setAdGroupPageSize(s); setAdGroupPage(1); }}
       />
     );
   };
@@ -1009,6 +1047,9 @@ export default function HierarchicalCampaignManager() {
         keyField="ad_id"
         loading={adsLoading}
         emptyMessage="No ads found"
+        pagination={adsPagination}
+        onPageChange={setAdsPage}
+        onPageSizeChange={(s) => { setAdsPageSize(s); setAdsPage(1); }}
       />
     );
   };
@@ -1088,6 +1129,9 @@ export default function HierarchicalCampaignManager() {
         keyField="keyword_id"
         loading={keywordsLoading}
         emptyMessage="No keywords found"
+        pagination={keywordPagination}
+        onPageChange={setKeywordPage}
+        onPageSizeChange={(s) => { setKeywordPageSize(s); setKeywordPage(1); }}
       />
     );
   };
@@ -1383,11 +1427,11 @@ export default function HierarchicalCampaignManager() {
           onClose={() => setShowPortfolioModal(false)}
           onSelect={async (portfolioId: number) => {
             try {
-              if (selectedRows.size === 1) {
-                const campaignId = Array.from(selectedRows)[0];
-                await addCampaignToPortfolio(campaignId, portfolioId);
+              const campaignIds = Array.from(selectedRows).map(id => Number(id));
+              if (campaignIds.length === 1) {
+                await addCampaignToPortfolio(campaignIds[0], portfolioId);
               } else {
-                await bulkAddCampaignsToPortfolio(Array.from(selectedRows), portfolioId);
+                await bulkAddCampaignsToPortfolio(campaignIds, portfolioId);
               }
               queryClient.invalidateQueries({ queryKey: ['campaigns'] });
               setShowPortfolioModal(false);

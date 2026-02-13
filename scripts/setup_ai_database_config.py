@@ -23,26 +23,27 @@ logger = logging.getLogger(__name__)
 
 
 def setup_database_schema(db: DatabaseConnector) -> bool:
-    """Create database tables for AI settings"""
-    schema_path = Path(__file__).parent.parent / 'src' / 'database' / 'ai_settings_schema.sql'
-    
-    if not schema_path.exists():
-        logger.error(f"Schema file not found: {schema_path}")
-        return False
-    
+    """Verify AI settings tables exist (created by consolidated schema.sql)"""
     try:
-        with open(schema_path, 'r') as f:
-            schema_sql = f.read()
-        
         with db.get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(schema_sql)
-                conn.commit()
-        
-        logger.info("Database schema created successfully")
-        return True
+                cursor.execute("""
+                    SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_name IN (
+                        'ai_rule_engine_settings',
+                        'ai_control_settings'
+                    );
+                """)
+                count = cursor.fetchone()[0]
+                if count == 2:
+                    logger.info("AI settings tables already exist (from consolidated schema)")
+                    return True
+                else:
+                    logger.error(f"Only {count}/2 AI settings tables found. "
+                                 "Run the main schema.sql first via setup_database.sh")
+                    return False
     except Exception as e:
-        logger.error(f"Error creating database schema: {e}")
+        logger.error(f"Error checking AI settings tables: {e}")
         return False
 
 
