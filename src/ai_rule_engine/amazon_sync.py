@@ -103,7 +103,8 @@ class AmazonSPAPIClient:
             raise
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None,
-                     params: Optional[Dict] = None) -> Dict[str, Any]:
+                     params: Optional[Dict] = None,
+                     extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """
         Make authenticated request to Amazon Advertising API
         
@@ -112,6 +113,7 @@ class AmazonSPAPIClient:
             endpoint: API endpoint
             data: Request body data
             params: Query parameters
+            extra_headers: Additional headers to merge (e.g. Accept for v3 endpoints)
             
         Returns:
             Response JSON
@@ -124,6 +126,9 @@ class AmazonSPAPIClient:
             'Amazon-Advertising-API-Scope': self.profile_id,
             'Content-Type': 'application/json'
         }
+        
+        if extra_headers:
+            headers.update(extra_headers)
         
         url = f"{self.api_base_url}{endpoint}"
         
@@ -295,62 +300,86 @@ class AmazonSPAPIClient:
     
     def update_keyword_bids(self, keyword_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Update keyword bids
+        Update keyword bids using Amazon SP API v3
         
         Args:
-            keyword_updates: List of keyword updates with keywordId and bid
+            keyword_updates: List of keyword updates with keyword_id, bid, and optional state
             
         Returns:
-            Update response
+            Update response from Amazon API
             
-        WARNING: Uses deprecated v2 endpoint. Consider migrating to v3 API.
+        See: https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod
+        Endpoint: PUT /sp/keywords
         """
-        endpoint = '/v2/sp/keywords'
-        self.logger.debug("Using v2 endpoint for keyword updates")
+        endpoint = '/sp/keywords'
         
-        # Format updates for API
+        # Format updates for SP API v3
         formatted_updates = []
         for update in keyword_updates:
-            formatted_updates.append({
-                'keywordId': update['keyword_id'],
-                'state': update.get('state', 'enabled'),
+            keyword_data = {
+                'keywordId': str(update['keyword_id']),
                 'bid': update['bid']
-            })
+            }
+            # Only include state if explicitly provided
+            if update.get('state'):
+                keyword_data['state'] = update['state'].upper()
+            formatted_updates.append(keyword_data)
         
-        self.logger.info(f"Updating {len(formatted_updates)} keyword bids")
+        # SP API v3 wraps keywords in a "keywords" object
+        request_body = {'keywords': formatted_updates}
         
-        response = self._make_request('PUT', endpoint, data=formatted_updates)
+        # v3 requires specific Accept and Content-Type headers
+        v3_headers = {
+            'Accept': 'application/vnd.spKeyword.v3+json',
+            'Content-Type': 'application/vnd.spKeyword.v3+json'
+        }
+        
+        self.logger.info(f"Updating {len(formatted_updates)} keyword bids via SP API v3")
+        
+        response = self._make_request('PUT', endpoint, data=request_body, extra_headers=v3_headers)
         
         self.logger.info(f"Keyword bid update response: {response}")
         return response
     
     def update_campaign_budgets(self, campaign_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Update campaign budgets
+        Update campaign budgets using Amazon SP API v3
         
         Args:
-            campaign_updates: List of campaign updates with campaignId and dailyBudget
+            campaign_updates: List of campaign updates with campaign_id, daily_budget, and optional state
             
         Returns:
-            Update response
+            Update response from Amazon API
             
-        WARNING: Uses deprecated v2 endpoint. Consider migrating to v3 API.
+        See: https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod
+        Endpoint: PUT /sp/campaigns
         """
-        endpoint = '/v2/sp/campaigns'
-        self.logger.debug("Using v2 endpoint for campaign updates")
+        endpoint = '/sp/campaigns'
         
-        # Format updates for API
+        # Format updates for SP API v3
         formatted_updates = []
         for update in campaign_updates:
-            formatted_updates.append({
-                'campaignId': update['campaign_id'],
-                'state': update.get('state', 'enabled'),
-                'dailyBudget': update['daily_budget']
-            })
+            campaign_data = {
+                'campaignId': str(update['campaign_id']),
+                'budget': {
+                    'budgetType': 'DAILY',
+                    'budget': update['daily_budget']
+                }
+            }
+            if update.get('state'):
+                campaign_data['state'] = update['state'].upper()
+            formatted_updates.append(campaign_data)
         
-        self.logger.info(f"Updating {len(formatted_updates)} campaign budgets")
+        request_body = {'campaigns': formatted_updates}
         
-        response = self._make_request('PUT', endpoint, data=formatted_updates)
+        v3_headers = {
+            'Accept': 'application/vnd.spCampaign.v3+json',
+            'Content-Type': 'application/vnd.spCampaign.v3+json'
+        }
+        
+        self.logger.info(f"Updating {len(formatted_updates)} campaign budgets via SP API v3")
+        
+        response = self._make_request('PUT', endpoint, data=request_body, extra_headers=v3_headers)
         
         self.logger.info(f"Campaign budget update response: {response}")
         return response

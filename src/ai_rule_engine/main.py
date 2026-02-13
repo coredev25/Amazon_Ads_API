@@ -9,7 +9,6 @@ import logging
 import sys
 import os
 import time
-import json
 from datetime import datetime
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -51,33 +50,6 @@ def load_config(config_path: str, db_connector: DatabaseConnector) -> RuleConfig
     print(f"Config file {config_path} not found, creating default configuration")
     config.to_file(config_path)
     return config
-
-
-def log_debug(session_id: str, run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
-    """Write debug log in NDJSON format"""
-    log_path = '/home/vip/Desktop/Amazon_Ads_API/.cursor/debug.log'
-    try:
-        # Ensure directory exists
-        log_dir = os.path.dirname(log_path)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
-        
-        log_entry = {
-            'sessionId': session_id,
-            'runId': run_id,
-            'hypothesisId': hypothesis_id,
-            'location': location,
-            'message': message,
-            'data': data,
-            'timestamp': int(time.time() * 1000)
-        }
-        with open(log_path, 'a') as f:
-            f.write(json.dumps(log_entry) + '\n')
-            f.flush()  # Ensure immediate write
-    except Exception as e:
-        # Log to stderr so we can see errors during debugging
-        import sys
-        print(f"DEBUG LOG ERROR: {e}", file=sys.stderr)
 
 
 def main():
@@ -131,10 +103,6 @@ def main():
         config.validate()
         logger.info("Configuration loaded and validated")
         
-        # #region agent log
-        log_debug('debug-session', 'init', 'H1', 'main.py:main', 'Main function entry', {'continuous': args.continuous, 'interval': args.interval})
-        # #endregion
-        
         if args.continuous:
             # Continuous execution mode
             logger.info(f"Starting continuous execution mode (interval: {args.interval} seconds)")
@@ -153,9 +121,6 @@ def main():
                     cycle_start = datetime.now()
                     
                     logger.info(f"Starting analysis cycle #{run_count} at {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
-                    # #region agent log
-                    log_debug('debug-session', run_id, 'H1', 'main.py:main', 'Continuous loop iteration start', {'run_count': run_count})
-                    # #endregion
                     
                     try:
                         filtered_recommendations = run_analysis_cycle(config, db_connector, args, run_id)
@@ -189,24 +154,15 @@ def main():
                         
                     except Exception as e:
                         logger.error(f"Error in analysis cycle #{run_count}: {e}", exc_info=True)
-                        # #region agent log
-                        log_debug('debug-session', run_id, 'H1', 'main.py:main', 'Cycle error', {'run_count': run_count, 'error': str(e)})
-                        # #endregion
                     
                     # Wait for next interval (always wait, even if cycle took longer than interval)
                     cycle_duration_total = (datetime.now() - cycle_start).total_seconds()
                     sleep_time = max(0, args.interval - cycle_duration_total)
                     if sleep_time > 0:
                         logger.info(f"Waiting {sleep_time:.1f} seconds until next analysis cycle...")
-                        # #region agent log
-                        log_debug('debug-session', run_id, 'H1', 'main.py:main', 'Sleeping until next cycle', {'sleep_time': sleep_time, 'cycle_duration': cycle_duration_total})
-                        # #endregion
                         time.sleep(sleep_time)
                     else:
                         logger.info(f"Cycle took {cycle_duration_total:.1f} seconds (longer than interval {args.interval}s), starting next cycle immediately")
-                        # #region agent log
-                        log_debug('debug-session', run_id, 'H1', 'main.py:main', 'Cycle exceeded interval, continuing immediately', {'cycle_duration': cycle_duration_total, 'interval': args.interval})
-                        # #endregion
                         
             except KeyboardInterrupt:
                 logger.info("Continuous execution stopped by user")
@@ -253,19 +209,11 @@ def main():
 
 def run_analysis_cycle(config: RuleConfig, db_connector, args, run_id: str = "run1"):
     """Run a single analysis cycle"""
-    # #region agent log
-    log_debug('debug-session', run_id, 'H1', 'main.py:run_analysis_cycle', 'Analysis cycle started', {'run_id': run_id})
-    # #endregion
-    
     try:
         # Initialize AI Rule Engine
         engine = AIRuleEngine(config, db_connector)
         logger = logging.getLogger(__name__)
         logger.info("AI Rule Engine initialized")
-        
-        # #region agent log
-        log_debug('debug-session', run_id, 'H1', 'main.py:run_analysis_cycle', 'Engine initialized', {'has_learning_loop': engine.learning_loop is not None})
-        # #endregion
         
         sync_manager = None
         if args.sync and not args.dry_run:
@@ -285,19 +233,7 @@ def run_analysis_cycle(config: RuleConfig, db_connector, args, run_id: str = "ru
         
         # Step 2: Run analysis
         logger.info("Starting analysis...")
-        # #region agent log
-        log_debug('debug-session', run_id, 'H1', 'main.py:run_analysis_cycle', 'Before analyze_campaigns', {'campaign_ids': args.campaigns})
-        # #endregion
-        
-        # #region agent log
-        log_debug('debug-session', run_id, 'H2', 'main.py:run_analysis_cycle', 'Before analyze_campaigns', {'has_campaign_ids': args.campaigns is not None, 'campaign_ids_count': len(args.campaigns) if args.campaigns else 0})
-        # #endregion
-        
         recommendations = engine.analyze_campaigns(args.campaigns)
-        
-        # #region agent log
-        log_debug('debug-session', run_id, 'H2', 'main.py:run_analysis_cycle', 'After analyze_campaigns', {'recommendations_count': len(recommendations)})
-        # #endregion
         
         # Filter recommendations
         filtered_recommendations = engine.recommendation_engine.filter_recommendations(
@@ -306,10 +242,6 @@ def run_analysis_cycle(config: RuleConfig, db_connector, args, run_id: str = "ru
             min_confidence=args.min_confidence
         )
         
-        # #region agent log
-        log_debug('debug-session', run_id, 'H4', 'main.py:run_analysis_cycle', 'After filter_recommendations', {'filtered_count': len(filtered_recommendations)})
-        # #endregion
-        
         # Generate summary
         summary = engine.get_recommendations_summary(filtered_recommendations)
         logger.info(f"Generated {summary['total_recommendations']} recommendations")
@@ -317,10 +249,6 @@ def run_analysis_cycle(config: RuleConfig, db_connector, args, run_id: str = "ru
         # Step 3: Run learning loop evaluation and training if enabled
         if engine.learning_loop and engine.model_trainer:
             logger.info("Running learning loop evaluation...")
-            # #region agent log
-            log_debug('debug-session', run_id, 'H3', 'main.py:run_analysis_cycle', 'Before learning loop evaluation', {'outcomes_count': len(engine.learning_loop.outcomes_history)})
-            # #endregion
-            
             try:
                 from ai_rule_engine.evaluation_pipeline import EvaluationPipeline
                 evaluation_pipeline = EvaluationPipeline(
@@ -328,15 +256,8 @@ def run_analysis_cycle(config: RuleConfig, db_connector, args, run_id: str = "ru
                 )
                 eval_results = evaluation_pipeline.run_daily_evaluation()
                 logger.info(f"Learning loop evaluation completed: {eval_results.get('total_outcomes', 0)} outcomes")
-                
-                # #region agent log
-                log_debug('debug-session', run_id, 'H3', 'main.py:run_analysis_cycle', 'After learning loop evaluation', {'eval_results': eval_results})
-                # #endregion
             except Exception as e:
                 logger.warning(f"Learning loop evaluation failed: {e}")
-                # #region agent log
-                log_debug('debug-session', run_id, 'H3', 'main.py:run_analysis_cycle', 'Learning loop evaluation error', {'error': str(e)})
-                # #endregion
         
         # Export recommendations
         if not args.dry_run:
@@ -349,18 +270,11 @@ def run_analysis_cycle(config: RuleConfig, db_connector, args, run_id: str = "ru
                 if upload_result.success:
                     logger.info(f"Upload successful: {upload_result.records_processed} recommendations applied")
         
-        # #region agent log
-        log_debug('debug-session', run_id, 'H1', 'main.py:run_analysis_cycle', 'Analysis cycle completed', {'recommendations': len(filtered_recommendations)})
-        # #endregion
-        
         return filtered_recommendations
         
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.error(f"Analysis cycle failed: {e}", exc_info=True)
-        # #region agent log
-        log_debug('debug-session', run_id, 'H1', 'main.py:run_analysis_cycle', 'Analysis cycle error', {'error': str(e)})
-        # #endregion
         raise
 
 

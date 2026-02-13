@@ -1355,24 +1355,4 @@ export const createEventAnnotation = async (
   return response.data;
 };
 
-// ============================================================================
-// INLINE EDITING
-// ============================================================================
-
-export const updateBidInline = async (keywordId: string, newBid: number) => {
-  const response = await api.post('/api/inline-edit/bid', {
-    keyword_id: keywordId,
-    new_bid: newBid,
-  });
-  return response.data;
-};
-
-export const updateBudgetInline = async (campaignId: string, newBudget: number) => {
-  const response = await api.post('/api/inline-edit/budget', {
-    campaign_id: campaignId,
-    new_budget: newBudget,
-  });
-  return response.data;
-};
-
 export default api;

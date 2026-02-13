@@ -1937,6 +1937,7 @@ async def get_keywords(
 async def update_keyword_bid(keyword_id: int, action: ActionRequest, current_user: UserResponse = Depends(get_current_user)):
     """Update keyword bid with inventory protection
     
+    keyword_id is the Amazon external keyword_id (not database internal id).
     Requires: admin, manager, or specialist role
     """
     try:
@@ -1944,41 +1945,60 @@ async def update_keyword_bid(keyword_id: int, action: ActionRequest, current_use
         if current_user.role not in ['admin', 'manager', 'specialist']:
             raise HTTPException(status_code=403, detail="Permission denied: You don't have access to modify bids")
         
+        keyword_state = None
+        keyword_text = None
+        
         # Check inventory status before allowing bid changes
         # Prevent bidding on out-of-stock products to reduce wasted spend
         try:
-            cursor = db_connector.connection.cursor()
-            # Get the ASIN associated with this keyword to check inventory
-            cursor.execute("""
-                SELECT k.asin FROM keywords k WHERE k.id = %s
-            """, (keyword_id,))
-            result = cursor.fetchone()
-            
-            if result and result[0]:
-                asin = result[0]
-                # Check if product is out of stock
-                cursor.execute("""
-                    SELECT ad_status FROM inventory_status 
-                    WHERE asin = %s AND ad_status = 'out_of_stock'
-                """, (asin,))
-                out_of_stock = cursor.fetchone()
-                
-                if out_of_stock:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"Cannot update bid: ASIN {asin} is out of stock. Bidding disabled to prevent wasted spend."
-                    )
+            with db_connector.get_connection() as conn:
+                import psycopg2.extras
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    # Get keyword details (use keyword_id, the Amazon external ID)
+                    cursor.execute("""
+                        SELECT keyword_id, keyword_text, bid, state, asin
+                        FROM keywords WHERE keyword_id = %s
+                    """, (keyword_id,))
+                    keyword = cursor.fetchone()
+                    
+                    if not keyword:
+                        raise HTTPException(status_code=404, detail=f"Keyword {keyword_id} not found")
+                    
+                    keyword_text = keyword.get('keyword_text', f'Keyword {keyword_id}')
+                    keyword_state = keyword.get('state')
+                    
+                    # Check if product is out of stock
+                    asin = keyword.get('asin')
+                    if asin:
+                        cursor.execute("""
+                            SELECT ad_status FROM inventory_status 
+                            WHERE asin = %s AND ad_status = 'out_of_stock'
+                        """, (asin,))
+                        out_of_stock = cursor.fetchone()
+                        
+                        if out_of_stock:
+                            raise HTTPException(
+                                status_code=422,
+                                detail=f"Cannot update bid: ASIN {asin} is out of stock. Bidding disabled to prevent wasted spend."
+                            )
+                    
+                    # Actually update the bid in the keywords table
+                    cursor.execute("""
+                        UPDATE keywords SET bid = %s, last_modified = NOW()
+                        WHERE keyword_id = %s
+                    """, (action.new_value, keyword_id))
+                    conn.commit()
         except HTTPException:
             raise
         except Exception as inv_error:
-            logger.warn(f"Could not check inventory for keyword {keyword_id}: {inv_error}")
+            logger.warning(f"Could not check inventory for keyword {keyword_id}: {inv_error}")
             # Continue anyway - inventory check is optional
         
-        # Save the bid change
+        # Save the bid change to history
         change_record = {
             'entity_type': 'keyword',
             'entity_id': keyword_id,
-            'entity_name': f"Keyword {keyword_id}",
+            'entity_name': keyword_text or f"Keyword {keyword_id}",
             'change_date': datetime.now(),
             'old_bid': action.old_value or 0,
             'new_bid': action.new_value,
@@ -2004,6 +2024,16 @@ async def update_keyword_bid(keyword_id: int, action: ActionRequest, current_use
             change_id=change_id
         )
         
+        # Sync bid change to Amazon Ads API
+        sync_manager = _get_amazon_sync_manager()
+        if sync_manager:
+            sync_manager.update_keyword_bids([{
+                'keyword_id': keyword_id,
+                'bid': float(action.new_value),
+                'state': _normalize_campaign_state(keyword_state)
+            }])
+        
+        logger.info(f"Bid updated for keyword {keyword_id}: ${action.old_value} -> ${action.new_value} by {current_user.username}")
         return {"status": "success", "message": f"Bid updated for keyword {keyword_id}", "change_id": change_id}
     except HTTPException:
         raise
@@ -5642,174 +5672,6 @@ async def create_event_annotation(
         raise
     except Exception as e:
         logger.error(f"Error creating event annotation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================================================
-# INLINE EDITING ENDPOINTS
-# ============================================================================
-
-class InlineBidRequest(BaseModel):
-    keyword_id: str
-    new_bid: float
-
-class InlineBudgetRequest(BaseModel):
-    campaign_id: str
-    new_budget: float
-
-@app.post("/api/inline-edit/bid")
-async def inline_edit_bid(
-    request: InlineBidRequest,
-    current_user: UserResponse = Depends(get_current_user)
-):
-    """Real-time bid update from inline editing"""
-    try:
-        keyword_id = request.keyword_id
-        new_bid = request.new_bid
-
-        if current_user.role not in ['admin', 'manager', 'specialist']:
-            raise HTTPException(status_code=403, detail="Permission denied")
-        
-        if new_bid < 0.02 or new_bid > 10000:
-            raise HTTPException(status_code=400, detail="Bid must be between $0.02 and $10,000")
-        
-        keyword_state = None
-        with db_connector.get_connection() as conn:
-            import psycopg2.extras
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                # Get current bid for logging
-                cursor.execute("""
-                    SELECT current_bid, keyword_text, state, keyword_id
-                    FROM keywords
-                    WHERE id = %s
-                """, (keyword_id,))
-                keyword = cursor.fetchone()
-                
-                if not keyword:
-                    raise HTTPException(status_code=404, detail="Keyword not found")
-                
-                old_bid = keyword['current_bid']
-                keyword_state = keyword.get('state')
-                
-                # Update bid
-                cursor.execute("""
-                    UPDATE keywords SET current_bid = %s, last_modified = NOW()
-                    WHERE id = %s
-                """, (new_bid, keyword_id))
-                
-                # Log change
-                cursor.execute("""
-                    INSERT INTO change_history
-                    (user_id, entity_type, entity_id, entity_name, old_value, new_value,
-                     change_type, reason, status, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                """, (
-                    current_user.id, 'keyword', keyword_id, keyword['keyword_text'],
-                    json.dumps({"bid": old_bid}), json.dumps({"bid": new_bid}),
-                    'manual', 'Inline editing', 'completed'
-                ))
-                
-                conn.commit()
-        
-        sync_manager = _get_amazon_sync_manager()
-        if sync_manager:
-            keyword_external_id = int(keyword.get('keyword_id', keyword_id)) if keyword else int(keyword_id)
-            sync_manager.update_keyword_bids([{
-                'keyword_id': keyword_external_id,
-                'bid': float(new_bid),
-                'state': _normalize_campaign_state(keyword_state)
-            }])
-
-        logger.info(f"Bid updated for keyword {keyword_id}: ${old_bid} -> ${new_bid} by {current_user.username}")
-        return {
-            "status": "success",
-            "keyword_id": keyword_id,
-            "old_bid": old_bid,
-            "new_bid": new_bid,
-            "message": f"Bid updated to ${new_bid}"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating bid: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/inline-edit/budget")
-async def inline_edit_budget(
-    request: InlineBudgetRequest,
-    current_user: UserResponse = Depends(get_current_user)
-):
-    """Real-time budget update from inline editing"""
-    try:
-        campaign_id = request.campaign_id
-        new_budget = request.new_budget
-
-        if current_user.role not in ['admin', 'manager']:
-            raise HTTPException(status_code=403, detail="Permission denied")
-        
-        if new_budget < 1 or new_budget > 1000000:
-            raise HTTPException(status_code=400, detail="Budget must be between $1 and $1,000,000")
-        
-        campaign_status = None
-        with db_connector.get_connection() as conn:
-            import psycopg2.extras
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                # Get current budget for logging
-                cursor.execute("""
-                    SELECT budget_amount, campaign_name, campaign_status, campaign_id
-                    FROM campaigns
-                    WHERE id = %s
-                """, (campaign_id,))
-                campaign = cursor.fetchone()
-                
-                if not campaign:
-                    raise HTTPException(status_code=404, detail="Campaign not found")
-                
-                old_budget = campaign['budget_amount']
-                campaign_status = campaign.get('campaign_status')
-                
-                # Update budget
-                cursor.execute("""
-                    UPDATE campaigns SET budget_amount = %s, updated_at = NOW()
-                    WHERE id = %s
-                """, (new_budget, campaign_id))
-                
-                # Log change
-                cursor.execute("""
-                    INSERT INTO change_history
-                    (user_id, entity_type, entity_id, entity_name, old_value, new_value,
-                     change_type, reason, status, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                """, (
-                    current_user.id, 'campaign', campaign_id, campaign['campaign_name'],
-                    json.dumps({"budget": old_budget}), json.dumps({"budget": new_budget}),
-                    'manual', 'Inline editing', 'completed'
-                ))
-                
-                conn.commit()
-        
-        sync_manager = _get_amazon_sync_manager()
-        if sync_manager:
-            campaign_external_id = int(campaign.get('campaign_id', campaign_id)) if campaign else int(campaign_id)
-            sync_manager.update_campaign_budgets([{
-                'campaign_id': campaign_external_id,
-                'daily_budget': float(new_budget),
-                'state': _normalize_campaign_state(campaign_status)
-            }])
-
-        logger.info(f"Budget updated for campaign {campaign_id}: ${old_budget} -> ${new_budget} by {current_user.username}")
-        return {
-            "status": "success",
-            "campaign_id": campaign_id,
-            "old_budget": old_budget,
-            "new_budget": new_budget,
-            "message": f"Budget updated to ${new_budget}"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating budget: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

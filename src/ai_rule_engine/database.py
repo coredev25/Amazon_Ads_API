@@ -947,149 +947,31 @@ class DatabaseConnector:
         """
         
         try:
-            # Ensure JSONB fields are properly formatted
             import json as json_module
-            import time
-            import os
             
-            # #region agent log
-            log_path = '/home/vip/Desktop/Amazon_Ads_API/.cursor/debug.log'
-            try:
-                log_dir = os.path.dirname(log_path)
-                if log_dir and not os.path.exists(log_dir):
-                    os.makedirs(log_dir, exist_ok=True)
-                log_entry = {
-                    'sessionId': 'debug-session',
-                    'runId': 'run1',
-                    'hypothesisId': 'H5',
-                    'location': 'database.py:save_recommendation',
-                    'message': 'save_recommendation entry',
-                    'data': {'recommendation_id': tracking_data.get('recommendation_id'), 'has_intelligence_signals': 'intelligence_signals' in tracking_data, 'has_metadata': 'metadata' in tracking_data},
-                    'timestamp': int(time.time() * 1000)
-                }
-                with open(log_path, 'a') as f:
-                    f.write(json_module.dumps(log_entry) + '\n')
-                    f.flush()
-            except:
-                pass
-            # #endregion
-            
+            # Ensure JSONB fields are properly formatted
             if tracking_data.get('intelligence_signals') is not None:
                 if isinstance(tracking_data['intelligence_signals'], str):
                     try:
                         tracking_data['intelligence_signals'] = json_module.loads(tracking_data['intelligence_signals'])
-                    except:
+                    except (json_module.JSONDecodeError, ValueError):
                         pass
             if tracking_data.get('metadata') is not None:
                 if isinstance(tracking_data['metadata'], str):
                     try:
                         tracking_data['metadata'] = json_module.loads(tracking_data['metadata'])
-                    except:
+                    except (json_module.JSONDecodeError, ValueError):
                         pass
                 elif not isinstance(tracking_data['metadata'], dict):
                     tracking_data['metadata'] = json_module.loads(json_module.dumps(tracking_data['metadata']))
             
-            # #region agent log
-            try:
-                log_entry = {
-                    'sessionId': 'debug-session',
-                    'runId': 'run1',
-                    'hypothesisId': 'H5',
-                    'location': 'database.py:save_recommendation',
-                    'message': 'Before DB connection',
-                    'data': {'recommendation_id': tracking_data.get('recommendation_id')},
-                    'timestamp': int(time.time() * 1000)
-                }
-                with open(log_path, 'a') as f:
-                    f.write(json_module.dumps(log_entry) + '\n')
-                    f.flush()
-            except:
-                pass
-            # #endregion
-            
             with self.get_connection() as conn:
-                # #region agent log
-                try:
-                    log_entry = {
-                        'sessionId': 'debug-session',
-                        'runId': 'run1',
-                        'hypothesisId': 'H5',
-                        'location': 'database.py:save_recommendation',
-                        'message': 'DB connection established',
-                        'data': {'recommendation_id': tracking_data.get('recommendation_id')},
-                        'timestamp': int(time.time() * 1000)
-                    }
-                    with open(log_path, 'a') as f:
-                        f.write(json_module.dumps(log_entry) + '\n')
-                        f.flush()
-                except:
-                    pass
-                # #endregion
-                
                 with conn.cursor() as cursor:
-                    # #region agent log
-                    try:
-                        log_entry = {
-                            'sessionId': 'debug-session',
-                            'runId': 'run1',
-                            'hypothesisId': 'H5',
-                            'location': 'database.py:save_recommendation',
-                            'message': 'Before execute',
-                            'data': {'recommendation_id': tracking_data.get('recommendation_id')},
-                            'timestamp': int(time.time() * 1000)
-                        }
-                        with open(log_path, 'a') as f:
-                            f.write(json_module.dumps(log_entry) + '\n')
-                            f.flush()
-                    except:
-                        pass
-                    # #endregion
-                    
                     cursor.execute(query, tracking_data)
                     conn.commit()
-                    
-                    # #region agent log
-                    try:
-                        log_entry = {
-                            'sessionId': 'debug-session',
-                            'runId': 'run1',
-                            'hypothesisId': 'H5',
-                            'location': 'database.py:save_recommendation',
-                            'message': 'Save successful',
-                            'data': {'recommendation_id': tracking_data.get('recommendation_id')},
-                            'timestamp': int(time.time() * 1000)
-                        }
-                        with open(log_path, 'a') as f:
-                            f.write(json_module.dumps(log_entry) + '\n')
-                            f.flush()
-                    except:
-                        pass
-                    # #endregion
-                    
                     return True
         except Exception as e:
             self.logger.error(f"Error saving recommendation: {e}", exc_info=True)
-            # #region agent log
-            try:
-                import json as json_module
-                import time
-                import os
-                log_path = '/home/vip/Desktop/Amazon_Ads_API/.cursor/debug.log'
-                log_entry = {
-                    'sessionId': 'debug-session',
-                    'runId': 'run1',
-                    'hypothesisId': 'H5',
-                    'location': 'database.py:save_recommendation',
-                    'message': 'Save exception',
-                    'data': {'recommendation_id': tracking_data.get('recommendation_id'), 'error': str(e)},
-                    'timestamp': int(time.time() * 1000)
-                }
-                with open(log_path, 'a') as f:
-                    f.write(json_module.dumps(log_entry) + '\n')
-                    f.flush()
-            except:
-                pass
-            # #endregion
             return False
     
     def get_tracked_recommendation(self, recommendation_id: str) -> Optional[Dict[str, Any]]:
