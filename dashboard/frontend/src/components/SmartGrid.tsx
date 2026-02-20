@@ -723,7 +723,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
             <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
               <tr>
                 {enableSelection && (
-                  <th className="px-4 py-3 text-left">
+                  <th className="px-3 py-3 text-left w-10">
                     <input
                       type="checkbox"
                       checked={allSelected}
@@ -966,7 +966,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                       )}
                     >
                       {enableSelection && (
-                        <td className="px-4 py-3">
+                        <td className="px-3 py-3 w-10">
                           <input
                             type="checkbox"
                             checked={normalizedSelectedRows.has(rowId)}

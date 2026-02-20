@@ -217,13 +217,14 @@ class DatabaseConnector:
                 cursor.execute(query, (keyword_id, start_date))
                 return cursor.fetchall()
     
-    def get_campaigns_with_performance(self, days_back: int = 7, portfolio_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_campaigns_with_performance(self, days_back: int = 7, portfolio_id: Optional[int] = None, campaign_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get all campaigns with their performance data
         
         Args:
             days_back: Number of days to look back
             portfolio_id: Optional portfolio ID to filter campaigns
+            campaign_id: Optional campaign ID to filter a single campaign
             
         Returns:
             List of campaigns with aggregated performance
@@ -268,6 +269,9 @@ class DatabaseConnector:
         start_date = datetime.now() - timedelta(days=days_back)
         params.append(start_date)
         
+        if campaign_id is not None:
+            query += " AND c.campaign_id = %s"
+            params.append(campaign_id)
         if portfolio_id is not None:
             query += " AND c.portfolio_id = %s"
             params.append(portfolio_id)

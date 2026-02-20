@@ -587,8 +587,9 @@ export const fetchAlerts = async (limit: number = 10): Promise<Alert[]> => {
 // API FUNCTIONS - CAMPAIGNS
 // ============================================================================
 
-export const fetchCampaigns = async (days: number = 7, portfolioId?: number, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<Campaign>> => {
+export const fetchCampaigns = async (days: number = 7, portfolioId?: number, page: number = 1, pageSize: number = 50, campaignId?: number): Promise<PaginatedResponse<Campaign>> => {
   const params = new URLSearchParams({ days: days.toString(), page: page.toString(), page_size: pageSize.toString() });
+  if (campaignId !== undefined) params.append('campaign_id', campaignId.toString());
   if (portfolioId !== undefined) params.append('portfolio_id', portfolioId.toString());
   const response = await api.get(`/api/campaigns?${params.toString()}`);
   return response.data;

@@ -1688,6 +1688,7 @@ async def get_ai_insights(days: int = Query(7, ge=1, le=90)):
 
 @app.get("/api/campaigns")
 async def get_campaigns(
+    campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
     days: int = Query(7, ge=1, le=90),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -1695,7 +1696,7 @@ async def get_campaigns(
 ):
     """Get campaigns with performance data (paginated)"""
     try:
-        campaigns = db_connector.get_campaigns_with_performance(days, portfolio_id)
+        campaigns = db_connector.get_campaigns_with_performance(days, portfolio_id, campaign_id)
         
         all_results = []
         for campaign in campaigns:

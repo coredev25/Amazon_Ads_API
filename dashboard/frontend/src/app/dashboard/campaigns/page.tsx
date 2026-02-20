@@ -142,8 +142,8 @@ export default function HierarchicalCampaignManager() {
   });
 
   const { data: campaignsResponse, isLoading: campaignsLoading } = useQuery({
-    queryKey: ['campaigns', days, portfolioFilter, campaignPage, campaignPageSize],
-    queryFn: () => fetchCampaigns(days, portfolioFilter, campaignPage, campaignPageSize),
+    queryKey: ['campaigns', days, portfolioFilter, campaignPage, campaignPageSize, urlCampaignId],
+    queryFn: () => fetchCampaigns(days, portfolioFilter, campaignPage, campaignPageSize, urlCampaignId ?? undefined),
     enabled: activeTab === 'campaigns' || activeTab === 'ad_groups' || activeTab === 'ads' || activeTab === 'keywords' || activeTab === 'targeting' || activeTab === 'search_terms' || activeTab === 'placements',
   });
   const campaigns = campaignsResponse?.data;
@@ -201,11 +201,10 @@ export default function HierarchicalCampaignManager() {
 
   const filteredCampaigns = useMemo(() => {
     return campaigns?.filter(c => {
-      if (urlCampaignId && c.campaign_id !== urlCampaignId) return false;
       if (statusFilter === 'all') return true;
       return c.status?.toLowerCase() === statusFilter.toLowerCase();
     }) || [];
-  }, [campaigns, statusFilter, urlCampaignId]);
+  }, [campaigns, statusFilter]);
 
   const filteredAdGroups = useMemo(() => {
     return adGroups?.filter(ag => {
