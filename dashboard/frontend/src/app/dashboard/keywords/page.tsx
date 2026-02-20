@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/contexts/ToastContext';
 import {
@@ -30,6 +31,8 @@ import {
 
 export default function KeywordsPage() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const urlKeywordId = searchParams.get('keyword_id') ? Number(searchParams.get('keyword_id')) : null;
   const [dateRange, setDateRange] = useState<DateRange>({
     type: 'last_7_days',
     days: 7,
@@ -101,6 +104,7 @@ export default function KeywordsPage() {
   });
 
   const filteredKeywords = keywords?.filter((k) => {
+    if (urlKeywordId && k.keyword_id !== urlKeywordId) return false;
     if (matchTypeFilter !== 'all' && k.match_type?.toLowerCase() !== matchTypeFilter.toLowerCase()) return false;
     if (stateFilter !== 'all' && k.state?.toLowerCase() !== stateFilter.toLowerCase()) return false;
     return true;

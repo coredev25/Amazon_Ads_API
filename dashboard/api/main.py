@@ -6,6 +6,7 @@ Provides REST API endpoints for the React frontend to interact with the AI Rule 
 import os
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
@@ -2289,79 +2290,80 @@ async def search(
     try:
         if not q or len(q.strip()) == 0:
             return SearchResponse(query=q, results=[], total=0)
-        
+
         query = q.strip().lower()
+        pattern = f"%{query}%"
         results: List[SearchResult] = []
-        
-        # Search campaigns
-        try:
-            campaigns = db_connector.get_campaigns_with_performance(30)
-            for campaign in campaigns:
-                campaign_name = campaign.get('campaign_name', '').lower()
-                if query in campaign_name:
-                    # Calculate match score (exact match = 1.0, partial = 0.5)
-                    match_score = 1.0 if campaign_name == query else 0.5
+
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT campaign_id, campaign_name,
+                           CASE WHEN LOWER(campaign_name) = %s THEN 1.0 ELSE 0.5 END as match_score
+                    FROM campaigns
+                    WHERE campaign_name ILIKE %s
+                    ORDER BY match_score DESC
+                    LIMIT %s
+                """, (query, pattern, limit))
+                for row in cur.fetchall():
                     results.append(SearchResult(
-                        type='campaign',
-                        id=campaign['campaign_id'],
-                        name=campaign.get('campaign_name', ''),
-                        campaign_id=campaign['campaign_id'],
-                        campaign_name=campaign.get('campaign_name', ''),
-                        match_score=match_score
+                        type='campaign', id=row['campaign_id'],
+                        name=row['campaign_name'],
+                        campaign_id=row['campaign_id'],
+                        campaign_name=row['campaign_name'],
+                        match_score=float(row['match_score'])
                     ))
-        except Exception as e:
-            logger.warning(f"Error searching campaigns: {e}")
-        
-        # Search keywords and ad groups
-        try:
-            all_campaigns = db_connector.get_campaigns_with_performance(30)
-            for campaign in all_campaigns:
-                campaign_id = campaign['campaign_id']
-                campaign_name = campaign.get('campaign_name', '')
-                
-                # Get ad groups for this campaign
-                ad_groups = db_connector.get_ad_groups_with_performance(campaign_id, 30)
-                for ad_group in ad_groups:
-                    ad_group_id = ad_group['ad_group_id']
-                    ad_group_name = ad_group.get('ad_group_name', '').lower()
-                    
-                    # Check if ad group name matches
-                    if query in ad_group_name:
-                        match_score = 1.0 if ad_group_name == query else 0.5
+
+                remaining = limit - len(results)
+                if remaining > 0:
+                    cur.execute("""
+                        SELECT ag.ad_group_id, ag.ad_group_name, ag.campaign_id,
+                               c.campaign_name,
+                               CASE WHEN LOWER(ag.ad_group_name) = %s THEN 1.0 ELSE 0.5 END as match_score
+                        FROM ad_groups ag
+                        JOIN campaigns c ON ag.campaign_id = c.campaign_id
+                        WHERE ag.ad_group_name ILIKE %s
+                        ORDER BY match_score DESC
+                        LIMIT %s
+                    """, (query, pattern, remaining))
+                    for row in cur.fetchall():
                         results.append(SearchResult(
-                            type='ad_group',
-                            id=ad_group_id,
-                            name=ad_group.get('ad_group_name', ''),
-                            campaign_id=campaign_id,
-                            campaign_name=campaign_name,
-                            ad_group_id=ad_group_id,
-                            ad_group_name=ad_group.get('ad_group_name', ''),
-                            match_score=match_score
+                            type='ad_group', id=row['ad_group_id'],
+                            name=row['ad_group_name'],
+                            campaign_id=row['campaign_id'],
+                            campaign_name=row['campaign_name'],
+                            ad_group_id=row['ad_group_id'],
+                            ad_group_name=row['ad_group_name'],
+                            match_score=float(row['match_score'])
                         ))
-                    
-                    # Search keywords in this ad group
-                    keywords = db_connector.get_keywords_with_performance(ad_group_id, 30)
-                    for keyword in keywords:
-                        keyword_text = keyword.get('keyword_text', '').lower()
-                        if query in keyword_text:
-                            match_score = 1.0 if keyword_text == query else 0.5
-                            results.append(SearchResult(
-                                type='keyword',
-                                id=keyword['keyword_id'],
-                                name=keyword.get('keyword_text', ''),
-                                campaign_id=campaign_id,
-                                campaign_name=campaign_name,
-                                ad_group_id=ad_group_id,
-                                ad_group_name=ad_group.get('ad_group_name', ''),
-                                match_score=match_score
-                            ))
-        except Exception as e:
-            logger.warning(f"Error searching keywords/ad groups: {e}")
-        
-        # Sort by match score (highest first) and limit results
+
+                remaining = limit - len(results)
+                if remaining > 0:
+                    cur.execute("""
+                        SELECT k.keyword_id, k.keyword_text, k.ad_group_id,
+                               ag.ad_group_name, ag.campaign_id, c.campaign_name,
+                               CASE WHEN LOWER(k.keyword_text) = %s THEN 1.0 ELSE 0.5 END as match_score
+                        FROM keywords k
+                        JOIN ad_groups ag ON k.ad_group_id = ag.ad_group_id
+                        JOIN campaigns c ON ag.campaign_id = c.campaign_id
+                        WHERE k.keyword_text ILIKE %s
+                        ORDER BY match_score DESC
+                        LIMIT %s
+                    """, (query, pattern, remaining))
+                    for row in cur.fetchall():
+                        results.append(SearchResult(
+                            type='keyword', id=row['keyword_id'],
+                            name=row['keyword_text'],
+                            campaign_id=row['campaign_id'],
+                            campaign_name=row['campaign_name'],
+                            ad_group_id=row['ad_group_id'],
+                            ad_group_name=row['ad_group_name'],
+                            match_score=float(row['match_score'])
+                        ))
+
         results.sort(key=lambda x: x.match_score, reverse=True)
-        results = results[:limit]
-        
+
         return SearchResponse(
             query=q,
             results=results,
@@ -2893,40 +2895,124 @@ async def get_negative_candidates(campaign_id: Optional[int] = None, limit: int 
         except Exception as e:
             logger.warning(f"Could not get negative candidates from database: {e}")
         
-        # If no candidates in database, run analysis
-        if not all_candidates:
+        # If no candidates in database, run bulk analysis (3 queries instead of N+1)
+        if not all_candidates and ai_engine.negative_manager:
             if campaign_id:
                 campaign_ids = [campaign_id]
             else:
                 campaigns = db_connector.get_campaigns_with_performance(14)
                 campaign_ids = [c['campaign_id'] for c in campaigns]
-            
-            for cid in campaign_ids:
+
+            if campaign_ids:
+                from collections import defaultdict
+                lookback = ai_engine.config.performance_lookback_days
+                now = datetime.now()
+                start_lookback = now - timedelta(days=lookback)
+                start_30d = now - timedelta(days=30)
+                cutoff_14d = (now - timedelta(days=14)).date()
+                cutoff_7d = (now - timedelta(days=7)).date()
+
                 try:
-                    candidates = ai_engine.get_negative_keyword_candidates(cid)
-                    
-                    for candidate in candidates:
-                        all_candidates.append(NegativeCandidateData(
-                            keyword_id=candidate['keyword_id'],
-                            keyword_text=candidate['keyword_text'],
-                            match_type=candidate.get('match_type', 'BROAD'),
-                            campaign_id=cid,
-                            ad_group_id=candidate.get('ad_group_id', 0),
-                            spend=float(candidate.get('cost', 0) or 0),
-                            clicks=int(candidate.get('clicks', 0) or 0),
-                            impressions=int(candidate.get('impressions', 0) or 0),
-                            orders=int(candidate.get('orders', 0) or 0),
-                            severity=candidate['severity'],
-                            confidence=candidate['confidence'],
-                            reason=candidate['reason'],
-                            suggested_action=candidate.get('suggested_match_type', 'negative_exact'),
-                            status='pending'
-                        ))
+                    with db_connector.get_connection() as conn:
+                        import psycopg2.extras
+                        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                            cur.execute("""
+                                SELECT ag.ad_group_id, ag.campaign_id
+                                FROM ad_groups ag
+                                LEFT JOIN ad_group_performance agp
+                                    ON ag.ad_group_id = agp.ad_group_id AND agp.report_date >= %s
+                                WHERE ag.campaign_id = ANY(%s)
+                                GROUP BY ag.ad_group_id, ag.campaign_id
+                                HAVING COALESCE(SUM(agp.impressions), 0) >= 50
+                            """, (start_lookback, campaign_ids))
+                            ad_groups = cur.fetchall()
+
+                            if ad_groups:
+                                ag_ids = [ag['ad_group_id'] for ag in ad_groups]
+                                ag_to_cid = {ag['ad_group_id']: ag['campaign_id'] for ag in ad_groups}
+
+                                cur.execute("""
+                                    SELECT
+                                        k.keyword_id, k.keyword_text, k.match_type,
+                                        k.bid, k.state, k.ad_group_id,
+                                        COALESCE(SUM(kp.impressions), 0) as total_impressions,
+                                        COALESCE(SUM(kp.clicks), 0) as total_clicks,
+                                        COALESCE(SUM(kp.cost), 0) as total_cost,
+                                        COALESCE(SUM(kp.attributed_conversions_7d), 0) as total_conversions,
+                                        COALESCE(SUM(kp.attributed_sales_7d), 0) as total_sales,
+                                        CASE WHEN SUM(kp.cost) > 0
+                                            THEN SUM(kp.attributed_sales_7d) / SUM(kp.cost) END as avg_roas,
+                                        CASE WHEN SUM(kp.attributed_sales_7d) > 0
+                                            THEN SUM(kp.cost) / SUM(kp.attributed_sales_7d) END as avg_acos,
+                                        CASE WHEN SUM(kp.impressions) > 0
+                                            THEN SUM(kp.clicks)::float / SUM(kp.impressions) * 100
+                                            ELSE 0 END as avg_ctr
+                                    FROM keywords k
+                                    LEFT JOIN keyword_performance kp
+                                        ON k.keyword_id = kp.keyword_id AND kp.report_date >= %s
+                                    WHERE k.ad_group_id = ANY(%s) AND k.state = 'ENABLED'
+                                    GROUP BY k.keyword_id, k.keyword_text, k.match_type,
+                                             k.bid, k.state, k.ad_group_id
+                                    HAVING COALESCE(SUM(kp.impressions), 0) >= 10
+                                    ORDER BY total_cost DESC
+                                """, (start_lookback, ag_ids))
+                                keywords = cur.fetchall()
+
+                                if keywords:
+                                    kw_ids = [k['keyword_id'] for k in keywords]
+
+                                    cur.execute("""
+                                        SELECT keyword_id, report_date, impressions, clicks, cost,
+                                            attributed_conversions_1d, attributed_conversions_7d,
+                                            attributed_sales_1d, attributed_sales_7d,
+                                            CASE WHEN cost > 0
+                                                THEN attributed_sales_7d / cost END as roas_7d,
+                                            CASE WHEN attributed_sales_7d > 0
+                                                THEN cost / attributed_sales_7d END as acos_7d,
+                                            CASE WHEN impressions > 0
+                                                THEN clicks::float / impressions * 100
+                                                ELSE 0 END as ctr
+                                        FROM keyword_performance
+                                        WHERE keyword_id = ANY(%s) AND report_date >= %s
+                                        ORDER BY report_date DESC
+                                    """, (kw_ids, start_30d))
+                                    all_perf = cur.fetchall()
+
+                                    perf_by_kw = defaultdict(list)
+                                    for row in all_perf:
+                                        perf_by_kw[row['keyword_id']].append(row)
+
+                                    for kw in keywords:
+                                        kid = kw['keyword_id']
+                                        rows = perf_by_kw.get(kid, [])
+                                        perf_7d = [r for r in rows if r['report_date'] >= cutoff_7d]
+                                        perf_14d = [r for r in rows if r['report_date'] >= cutoff_14d]
+
+                                        candidate = ai_engine.negative_manager.identify_negative_candidates(
+                                            kw, [perf_7d, perf_14d, rows]
+                                        )
+                                        if candidate:
+                                            cid = ag_to_cid[kw['ad_group_id']]
+                                            all_candidates.append(NegativeCandidateData(
+                                                keyword_id=kw['keyword_id'],
+                                                keyword_text=candidate.keyword_text,
+                                                match_type=candidate.match_type,
+                                                campaign_id=cid,
+                                                ad_group_id=kw['ad_group_id'],
+                                                spend=float(candidate.cost or 0),
+                                                clicks=int(candidate.clicks or 0),
+                                                impressions=int(candidate.impressions or 0),
+                                                orders=int(candidate.conversions or 0),
+                                                severity=candidate.severity,
+                                                confidence=candidate.confidence,
+                                                reason=candidate.reason,
+                                                suggested_action=candidate.suggested_match_type or 'negative_exact',
+                                                status='pending'
+                                            ))
+                                            if len(all_candidates) >= limit:
+                                                break
                 except Exception as e:
-                    logger.warning(f"Could not analyze campaign {cid}: {e}")
-                
-                if len(all_candidates) >= limit:
-                    break
+                    logger.warning(f"Bulk negative analysis failed: {e}")
         
         return all_candidates[:limit]
     except Exception as e:

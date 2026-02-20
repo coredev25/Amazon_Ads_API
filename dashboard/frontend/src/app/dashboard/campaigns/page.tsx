@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/contexts/ToastContext';
 import {
@@ -56,6 +57,8 @@ import {
 
 export default function HierarchicalCampaignManager() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const urlCampaignId = searchParams.get('campaign_id') ? Number(searchParams.get('campaign_id')) : null;
   const [activeTab, setActiveTab] = useState<TabType>('campaigns');
   const [dateRange, setDateRange] = useState<DateRange>({
     type: 'last_7_days',
@@ -198,10 +201,11 @@ export default function HierarchicalCampaignManager() {
 
   const filteredCampaigns = useMemo(() => {
     return campaigns?.filter(c => {
+      if (urlCampaignId && c.campaign_id !== urlCampaignId) return false;
       if (statusFilter === 'all') return true;
       return c.status?.toLowerCase() === statusFilter.toLowerCase();
     }) || [];
-  }, [campaigns, statusFilter]);
+  }, [campaigns, statusFilter, urlCampaignId]);
 
   const filteredAdGroups = useMemo(() => {
     return adGroups?.filter(ag => {

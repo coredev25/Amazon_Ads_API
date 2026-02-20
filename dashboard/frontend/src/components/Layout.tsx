@@ -192,7 +192,7 @@ export default function Layout({ children }: LayoutProps) {
       } finally {
         setIsSearching(false);
       }
-    }, 300);
+    }, 1000);
 
     return () => {
       if (searchTimeoutRef.current) {
