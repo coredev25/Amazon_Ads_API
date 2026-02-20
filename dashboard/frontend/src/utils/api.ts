@@ -23,15 +23,13 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 errors (redirect to login)
+// Handle 401 errors — clear tokens and let AuthContext handle the redirect
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('access_token');
-      if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
-        window.location.href = '/login';
-      }
+      localStorage.removeItem('auth_user');
     }
     return Promise.reject(error);
   }

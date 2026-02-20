@@ -90,14 +90,22 @@ def get_db():
     
     db_connector = None
     
-    # Try the standard module path first
+    # Try the standard module path first (uvicorn dashboard.api.main:app from project root)
     try:
         from dashboard.api.main import db_connector as _db
         db_connector = _db
     except (ImportError, AttributeError):
         pass
     
-    # If not found, check __main__ module (when run directly with python)
+    # Try short module path (uvicorn api.main:app from dashboard/ directory)
+    if db_connector is None:
+        try:
+            from api.main import db_connector as _db
+            db_connector = _db
+        except (ImportError, AttributeError):
+            pass
+    
+    # Check __main__ module (when run directly with python)
     if db_connector is None:
         try:
             main_module = sys.modules.get('__main__')
@@ -105,6 +113,14 @@ def get_db():
                 db_connector = main_module.db_connector
         except (AttributeError, TypeError):
             pass
+    
+    # Check all loaded modules for api.main
+    if db_connector is None:
+        for mod_name in ['api.main', 'dashboard.api.main']:
+            mod = sys.modules.get(mod_name)
+            if mod and hasattr(mod, 'db_connector'):
+                db_connector = mod.db_connector
+                break
     
     if db_connector is None:
         raise HTTPException(

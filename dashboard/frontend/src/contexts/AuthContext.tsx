@@ -28,31 +28,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  // Check if user is logged in on mount
   useEffect(() => {
-    checkAuth();
+    const token = localStorage.getItem('access_token');
+    const storedUser = localStorage.getItem('auth_user');
+
+    if (token && storedUser) {
+      try {
+        setUser(JSON.parse(storedUser));
+      } catch { /* ignore corrupt data */ }
+      setLoading(false);
+      verifyToken(token);
+    } else if (token) {
+      verifyToken(token);
+    } else {
+      setLoading(false);
+    }
   }, []);
 
-  const checkAuth = async () => {
+  const verifyToken = async (token: string) => {
     try {
-      const token = localStorage.getItem('access_token');
-      if (!token) {
-        setLoading(false);
-        return;
-      }
-
-      // Verify token is still valid
       const response = await api.get('/api/auth/me', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-
       setUser(response.data);
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      localStorage.removeItem('access_token');
-      setUser(null);
+      localStorage.setItem('auth_user', JSON.stringify(response.data));
+    } catch (error: any) {
+      if (error.response?.status === 401) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('auth_user');
+        setUser(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -68,9 +73,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { access_token, user: userData } = response.data;
       
       localStorage.setItem('access_token', access_token);
+      localStorage.setItem('auth_user', JSON.stringify(userData));
       setUser(userData);
       
-      // Redirect to dashboard
       router.push('/dashboard');
     } catch (error: any) {
       console.error('Login failed:', error);
@@ -96,6 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem('access_token');
+    localStorage.removeItem('auth_user');
     setUser(null);
     router.push('/login');
   };
