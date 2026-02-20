@@ -891,18 +891,18 @@ export const applyCampaignAction = async (campaignId: number, action: {
 // ============================================================================
 
 export const fetchKeywords = async (params: {
+  keyword_id?: number;
   campaign_id?: number;
   ad_group_id?: number;
   days?: number;
-  limit?: number;
   page?: number;
   page_size?: number;
 }): Promise<PaginatedResponse<Keyword>> => {
   const queryParams = new URLSearchParams();
+  if (params.keyword_id) queryParams.append('keyword_id', params.keyword_id.toString());
   if (params.campaign_id) queryParams.append('campaign_id', params.campaign_id.toString());
   if (params.ad_group_id) queryParams.append('ad_group_id', params.ad_group_id.toString());
   if (params.days) queryParams.append('days', params.days.toString());
-  if (params.limit) queryParams.append('limit', params.limit.toString());
   queryParams.append('page', (params.page || 1).toString());
   queryParams.append('page_size', (params.page_size || 50).toString());
   

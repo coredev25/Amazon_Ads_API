@@ -1874,23 +1874,27 @@ async def apply_campaign_action(campaign_id: int, action: ActionRequest, backgro
 
 @app.get("/api/keywords")
 async def get_keywords(
+    keyword_id: Optional[int] = None,
     campaign_id: Optional[int] = None,
     ad_group_id: Optional[int] = None,
     days: int = Query(7, ge=1, le=90),
-    limit: int = Query(200, ge=1, le=2000),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200),
 ):
-    """Get keywords with performance data"""
+    """Get keywords with performance data (server-side pagination)"""
     try:
         start_date = datetime.now() - timedelta(days=days)
+        offset = (page - 1) * page_size
 
         with db_connector.get_connection() as conn:
             import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                filters = []
+                filters = ["k.state = 'ENABLED'"]
                 params: list = [start_date]
 
+                if keyword_id:
+                    filters.append("k.keyword_id = %s")
+                    params.append(keyword_id)
                 if campaign_id:
                     filters.append("ag.campaign_id = %s")
                     params.append(campaign_id)
@@ -1898,7 +1902,17 @@ async def get_keywords(
                     filters.append("k.ad_group_id = %s")
                     params.append(ad_group_id)
 
-                where_extra = (" AND " + " AND ".join(filters)) if filters else ""
+                where_clause = " AND ".join(filters)
+
+                cur.execute(f"""
+                    SELECT COUNT(*) as total FROM keywords k
+                    JOIN ad_groups ag ON k.ad_group_id = ag.ad_group_id
+                    WHERE {where_clause}
+                """, params[1:])
+                total = cur.fetchone()['total']
+
+                if total == 0:
+                    return {"data": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
 
                 cur.execute(f"""
                     SELECT
@@ -1913,36 +1927,36 @@ async def get_keywords(
                     JOIN ad_groups ag ON k.ad_group_id = ag.ad_group_id
                     LEFT JOIN keyword_performance kp
                         ON k.keyword_id = kp.keyword_id AND kp.report_date >= %s
-                    WHERE k.state = 'ENABLED'{where_extra}
+                    WHERE {where_clause}
                     GROUP BY k.keyword_id, k.keyword_text, k.match_type, k.bid, k.state,
                              k.ad_group_id, ag.campaign_id
                     ORDER BY spend DESC
-                    LIMIT %s
-                """, params + [limit])
+                    LIMIT %s OFFSET %s
+                """, params + [page_size, offset])
                 rows = cur.fetchall()
-
-                if not rows:
-                    return {"data": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
 
                 kw_ids = [r['keyword_id'] for r in rows]
 
-                cur.execute("""
-                    SELECT entity_id, locked_until, lock_reason
-                    FROM bid_adjustment_locks
-                    WHERE entity_type = 'keyword' AND locked_until > NOW()
-                      AND entity_id = ANY(%s)
-                """, (kw_ids,))
-                bid_locks = {r['entity_id']: r['lock_reason'] for r in cur.fetchall()}
+                bid_locks: dict = {}
+                last_changes: dict = {}
+                if kw_ids:
+                    cur.execute("""
+                        SELECT entity_id, locked_until, lock_reason
+                        FROM bid_adjustment_locks
+                        WHERE entity_type = 'keyword' AND locked_until > NOW()
+                          AND entity_id = ANY(%s)
+                    """, (kw_ids,))
+                    bid_locks = {r['entity_id']: r['lock_reason'] for r in cur.fetchall()}
 
-                cur.execute("""
-                    SELECT DISTINCT ON (entity_id) entity_id, new_bid, reason
-                    FROM bid_change_history
-                    WHERE entity_type = 'keyword' AND entity_id = ANY(%s)
-                    ORDER BY entity_id, change_date DESC
-                """, (kw_ids,))
-                last_changes = {r['entity_id']: r for r in cur.fetchall()}
+                    cur.execute("""
+                        SELECT DISTINCT ON (entity_id) entity_id, new_bid, reason
+                        FROM bid_change_history
+                        WHERE entity_type = 'keyword' AND entity_id = ANY(%s)
+                        ORDER BY entity_id, change_date DESC
+                    """, (kw_ids,))
+                    last_changes = {r['entity_id']: r for r in cur.fetchall()}
 
-        all_keywords = []
+        page_keywords = []
         for r in rows:
             spend = float(r['spend'] or 0)
             sales = float(r['sales'] or 0)
@@ -1955,7 +1969,7 @@ async def get_keywords(
             ai_bid = float(lc['new_bid']) if lc else None
             reason = lc['reason'] if lc else None
 
-            all_keywords.append(KeywordData(
+            page_keywords.append(KeywordData(
                 keyword_id=kid,
                 keyword_text=r['keyword_text'],
                 match_type=r.get('match_type', 'BROAD'),
@@ -1979,13 +1993,10 @@ async def get_keywords(
                 lock_reason=bid_locks.get(kid)
             ))
 
-        total = len(all_keywords)
         total_pages = max(1, (total + page_size - 1) // page_size)
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
 
         return {
-            "data": all_keywords[start_idx:end_idx],
+            "data": page_keywords,
             "total": total,
             "page": page,
             "page_size": page_size,

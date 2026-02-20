@@ -56,8 +56,8 @@ export default function KeywordsPage() {
   const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
 
   const { data: keywordsResponse, isLoading, refetch } = useQuery({
-    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), page, pageSize],
-    queryFn: () => fetchKeywords({ days, page, page_size: pageSize }),
+    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), page, pageSize, urlKeywordId],
+    queryFn: () => fetchKeywords({ days, page, page_size: pageSize, ...(urlKeywordId ? { keyword_id: urlKeywordId } : {}) }),
   });
 
   const keywords = keywordsResponse?.data;
@@ -104,7 +104,6 @@ export default function KeywordsPage() {
   });
 
   const filteredKeywords = keywords?.filter((k) => {
-    if (urlKeywordId && k.keyword_id !== urlKeywordId) return false;
     if (matchTypeFilter !== 'all' && k.match_type?.toLowerCase() !== matchTypeFilter.toLowerCase()) return false;
     if (stateFilter !== 'all' && k.state?.toLowerCase() !== stateFilter.toLowerCase()) return false;
     return true;
