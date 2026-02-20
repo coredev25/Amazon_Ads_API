@@ -491,7 +491,7 @@ export default function CommandCenter() {
       {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Trend Chart */}
-        <div className="lg:col-span-2 card">
+        <div className="lg:col-span-2 card flex flex-col">
           <div className="card-header flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
               Spend vs Sales Trend
@@ -519,7 +519,7 @@ export default function CommandCenter() {
               </button>
             </div>
           </div>
-          <div className="card-body">
+          <div className="card-body flex-1 flex flex-col justify-center">
             {trendsLoading ? (
               <div className="h-[300px] skeleton" />
             ) : (
