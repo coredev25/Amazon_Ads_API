@@ -696,36 +696,35 @@ class AmazonAdsClient {
   }
 
   /**
-   * Get Sponsored Brands campaigns using v4 API (GET /sb/v4/campaigns)
-   * 
-   * FIX: Changed from POST /sb/v4/campaigns/list to GET /sb/v4/campaigns to resolve 400 error.
-   * SB v4 does not support POST /sb/v4/campaigns/list. It uses GET with query params.
-   * 
-   * Supports filters:
-   *  - stateFilter: string, array, or object { include: [] } (e.g., 'enabled,paused' or ['enabled','paused'])
-   *  - campaignIdFilter: comma-separated string or array
-   *  - name: partial name match
-   *  - portfolioIdFilter: comma-separated string or array
-   *  - startIndex: integer (pagination start)
-   *  - count: integer (results per page, max: 100)
+   * Get Sponsored Brands campaigns using v4 API
+   * Endpoint: POST /sb/v4/campaigns/list (no body — filters via query params)
    *
-   * Note: For large accounts, use `getAllSBCampaigns` which pages through results via startIndex/count.
+   * The SB v4 list endpoint uses POST but expects a null body ("Expected null").
+   * All filtering and pagination are passed as query parameters.
    */
   async getSponsoredBrandsCampaigns(filters = {}) {
-    logger.info('Fetching Sponsored Brands campaigns (v4 API) via GET /sb/v4/campaigns...');
+    logger.info('Fetching Sponsored Brands campaigns (v4 API) via POST /sb/v4/campaigns/list...');
 
     const params = this._buildSBCampaignsQueryParams(filters);
     const customHeaders = {
       'Accept': 'application/vnd.sbcampaignresource.v4+json'
     };
 
-    // Perform GET request — no body, filters via query params
-    const response = await this.makeRequest('GET', '/sb/v4/campaigns', null, params, 3, 100, customHeaders);
+    const response = await this.makeRequest('POST', '/sb/v4/campaigns/list', null, params, 3, 100, customHeaders);
 
-    // v4 GET returns an array of campaign objects directly
-    if (Array.isArray(response)) return response;
-    if (response && Array.isArray(response.campaigns)) return response.campaigns;
-    return response || [];
+    if (!response) return { campaigns: [], nextToken: null };
+
+    let campaigns = [];
+    let nextToken = null;
+
+    if (Array.isArray(response)) {
+      campaigns = response;
+    } else if (typeof response === 'object') {
+      campaigns = response.campaigns || [];
+      nextToken = response.nextToken || null;
+    }
+
+    return { campaigns, nextToken };
   }
 
   /**
@@ -735,56 +734,54 @@ class AmazonAdsClient {
   async getSBCampaignsByIds(campaignIds = []) {
     if (!Array.isArray(campaignIds) || campaignIds.length === 0) return [];
     const idFilter = campaignIds.join(',');
-    return await this.getSponsoredBrandsCampaigns({ campaignIdFilter: idFilter });
+    const result = await this.getSponsoredBrandsCampaigns({ campaignIdFilter: idFilter });
+    return result.campaigns || [];
   }
 
   /**
-   * Convenience: Page through all SB campaigns using startIndex/count pagination.
-   * Accumulates results until fewer than `count` results are returned.
-   * 
-   * FIX: Changed from POST nextToken pagination to GET startIndex/count pagination
-   * to match the actual SB v4 API (GET /sb/v4/campaigns).
+   * Page through all SB campaigns using nextToken pagination.
+   * Endpoint: POST /sb/v4/campaigns/list (no body, query params only)
    */
   async getAllSBCampaigns(filters = {}) {
     const allCampaigns = [];
-    let startIndex = Number.isInteger(filters.startIndex) ? filters.startIndex : 0;
-    const count = Number.isInteger(filters.count) ? filters.count : 100;
-    let hasMore = true;
+    let nextToken = null;
+    const maxPages = 100;
+    let page = 0;
 
-    while (hasMore) {
-      const pageFilters = { ...filters, startIndex, count };
-      const campaigns = await this.getSponsoredBrandsCampaigns(pageFilters);
+    do {
+      page++;
+      if (page > maxPages) {
+        logger.warn(`SB campaigns: reached max page limit (${maxPages}), stopping`);
+        break;
+      }
 
-      if (!Array.isArray(campaigns)) break;
+      const pageFilters = { ...filters, maxResults: 100 };
+      if (nextToken) {
+        pageFilters.nextToken = nextToken;
+      }
+
+      const result = await this.getSponsoredBrandsCampaigns(pageFilters);
+      const campaigns = result.campaigns || [];
+      nextToken = result.nextToken || null;
 
       allCampaigns.push(...campaigns);
-
-      if (campaigns.length < count) {
-        hasMore = false;
-      } else {
-        startIndex += count;
-      }
 
       if (allCampaigns.length > 0) {
         logger.info(`Fetched ${allCampaigns.length} Sponsored Brands campaigns so far...`);
       }
-    }
+    } while (nextToken);
 
     return allCampaigns;
   }
 
   /**
-   * Build query params for GET /sb/v4/campaigns
-   * 
-   * FIX: Changed from building a POST body to building GET query parameters.
-   * SB v4 GET endpoint accepts query params: stateFilter, campaignIdFilter, name,
-   * portfolioIdFilter, startIndex, count, adFormatFilter, creativeType.
+   * Build query params for POST /sb/v4/campaigns/list
+   * SB v4 uses comma-delimited strings for filters passed as query parameters.
    * @private
    */
   _buildSBCampaignsQueryParams(filters = {}) {
     const params = {};
 
-    // stateFilter: comma-separated string for GET query params
     if (filters.stateFilter) {
       if (typeof filters.stateFilter === 'object' && Array.isArray(filters.stateFilter.include)) {
         params.stateFilter = filters.stateFilter.include.map(s => String(s).trim().toLowerCase()).join(',');
@@ -794,45 +791,39 @@ class AmazonAdsClient {
         params.stateFilter = String(filters.stateFilter).trim().toLowerCase();
       }
     } else {
-      // Default to common states
       params.stateFilter = 'enabled,paused,archived';
     }
 
-    // campaignIdFilter: comma-separated string
     if (filters.campaignIdFilter) {
       params.campaignIdFilter = Array.isArray(filters.campaignIdFilter)
         ? filters.campaignIdFilter.join(',')
         : filters.campaignIdFilter;
     }
 
-    // name filter
     if (filters.name) {
       params.name = filters.name;
     } else if (filters.nameFilter) {
       params.name = filters.nameFilter;
     }
 
-    // portfolioIdFilter
     if (filters.portfolioIdFilter) {
       params.portfolioIdFilter = Array.isArray(filters.portfolioIdFilter)
         ? filters.portfolioIdFilter.join(',')
         : filters.portfolioIdFilter;
     }
 
-    // Pagination
-    if (Number.isInteger(filters.startIndex)) {
-      params.startIndex = filters.startIndex;
-    }
-    if (Number.isInteger(filters.count)) {
-      params.count = filters.count;
-    }
-
-    // Optional SB-specific filters
     if (filters.adFormatFilter) {
       params.adFormatFilter = filters.adFormatFilter;
     }
-    if (filters.creativeType) {
-      params.creativeType = filters.creativeType;
+
+    if (Number.isInteger(filters.maxResults)) {
+      params.maxResults = Math.min(Math.max(filters.maxResults, 10), 100);
+    } else {
+      params.maxResults = 100;
+    }
+
+    if (filters.nextToken) {
+      params.nextToken = filters.nextToken;
     }
 
     return params;
