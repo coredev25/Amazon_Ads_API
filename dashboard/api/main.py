@@ -199,6 +199,11 @@ class TrendDataPoint(BaseModel):
     sales: float
     acos: float
     roas: float
+    impressions: int = 0
+    clicks: int = 0
+    cpc: float = 0
+    ctr: float = 0
+    cvr: float = 0
 
 
 class Alert(BaseModel):
@@ -1255,12 +1260,14 @@ async def get_overview_trends(
             end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
             start = (now - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Get daily performance data - only for dates within the specified range
         query = """
         SELECT 
             report_date,
-            SUM(cost) as spend,
-            SUM(attributed_sales_7d) as sales
+            COALESCE(SUM(cost), 0) as spend,
+            COALESCE(SUM(attributed_sales_7d), 0) as sales,
+            COALESCE(SUM(impressions), 0)::int as impressions,
+            COALESCE(SUM(clicks), 0)::int as clicks,
+            COALESCE(SUM(attributed_conversions_7d), 0)::int as orders
         FROM campaign_performance
         WHERE report_date >= %s AND report_date <= %s
         GROUP BY report_date
@@ -1277,15 +1284,26 @@ async def get_overview_trends(
         for row in rows:
             spend = float(row['spend'] or 0)
             sales = float(row['sales'] or 0)
+            impressions = int(row['impressions'] or 0)
+            clicks = int(row['clicks'] or 0)
+            orders = int(row['orders'] or 0)
+
             acos = (spend / sales * 100) if sales > 0 else 0
             roas = (sales / spend) if spend > 0 else 0
-            
+            cpc = (spend / clicks) if clicks > 0 else 0
+            ctr = (clicks / impressions * 100) if impressions > 0 else 0
+            cvr = (orders / clicks * 100) if clicks > 0 else 0
             trends.append(TrendDataPoint(
                 date=row['report_date'].strftime('%Y-%m-%d'),
                 spend=round(spend, 2),
                 sales=round(sales, 2),
                 acos=round(acos, 2),
-                roas=round(roas, 2)
+                roas=round(roas, 2),
+                impressions=impressions,
+                clicks=clicks,
+                cpc=round(cpc, 2),
+                ctr=round(ctr, 2),
+                cvr=round(cvr, 2),
             ))
         
         return trends

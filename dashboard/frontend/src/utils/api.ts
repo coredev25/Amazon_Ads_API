@@ -72,6 +72,11 @@ export interface TrendDataPoint extends Record<string, string | number> {
   sales: number;
   acos: number;
   roas: number;
+  impressions: number;
+  clicks: number;
+  cpc: number;
+  ctr: number;
+  cvr: number;
 }
 
 export interface Alert {

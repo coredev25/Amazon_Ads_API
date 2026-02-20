@@ -122,12 +122,14 @@ export default function MasterPerformanceChart({
     { key: 'cpc' as const, label: 'CPC', icon: DollarSign, color: '#EC4899' },
     { key: 'ctr' as const, label: 'CTR', icon: Activity, color: '#14B8A6' },
     { key: 'roas' as const, label: 'ROAS', icon: TrendingUp, color: '#10B981' },
-    { key: 'cvr' as const, label: 'CVR', icon: Activity, color: '#14B8A6' },
+    { key: 'cvr' as const, label: 'CVR', icon: Activity, color: '#F472B6' },
   ];
 
   // Determine which metrics use left vs right axis
+  // right2 is a hidden axis for small-percentage metrics so they scale independently
   const leftAxisMetrics = ['spend', 'sales', 'impressions', 'clicks'];
-  const rightAxisMetrics = ['acos', 'cpc', 'ctr', 'cvr', 'roas'];
+  const rightAxisMetrics = ['acos', 'cpc', 'roas'];
+  const right2AxisMetrics = ['ctr', 'cvr'];
 
   // Get event annotation color based on type
   const getEventColor = (type: EventAnnotation['type']) => {
@@ -209,6 +211,12 @@ export default function MasterPerformanceChart({
                 if (value >= 100) return `${(value / 100).toFixed(1)}%`;
                 return `${value.toFixed(1)}${value < 10 ? '%' : ''}`;
               }}
+            />
+            <YAxis
+              yAxisId="right2"
+              orientation="right"
+              hide={true}
+              domain={['auto', 'auto']}
             />
             <Tooltip content={<CustomTooltip />} />
             <Legend
@@ -308,7 +316,7 @@ export default function MasterPerformanceChart({
             )}
             {visibleMetrics.ctr && (
               <Line
-                yAxisId="right"
+                yAxisId="right2"
                 type="monotone"
                 dataKey="ctr"
                 name="CTR"
@@ -332,14 +340,14 @@ export default function MasterPerformanceChart({
             )}
             {visibleMetrics.cvr && (
               <Line
-                yAxisId="right"
+                yAxisId="right2"
                 type="monotone"
                 dataKey="cvr"
                 name="CVR"
-                stroke="#14B8A6"
+                stroke="#F472B6"
                 strokeWidth={2}
                 dot={false}
-                strokeDasharray="2 2"
+                activeDot={{ r: 5, strokeWidth: 2 }}
               />
             )}
 

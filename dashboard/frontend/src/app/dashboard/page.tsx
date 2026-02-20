@@ -196,7 +196,7 @@ export default function CommandCenter() {
     rangeEnd.setHours(23, 59, 59, 999);
     
     // Create a map of existing data by date string (YYYY-MM-DD)
-    const dataMap = new Map<string, { spend: number; sales: number; acos: number; roas: number }>();
+    const dataMap = new Map<string, { spend: number; sales: number; acos: number; roas: number; impressions: number; clicks: number; cpc: number; ctr: number; cvr: number }>();
     
     if (trends && trends.length > 0) {
       trends.forEach(t => {
@@ -211,6 +211,11 @@ export default function CommandCenter() {
             sales: t.sales || 0,
             acos: t.acos || 0,
             roas: t.roas || 0,
+            impressions: t.impressions || 0,
+            clicks: t.clicks || 0,
+            cpc: t.cpc || 0,
+            ctr: t.ctr || 0,
+            cvr: t.cvr || 0,
           });
         }
       });
@@ -220,32 +225,33 @@ export default function CommandCenter() {
       // Generate all dates in the range and fill missing ones with zeros
       const allDates = generateDateRange(rangeStart, rangeEnd);
       
+      const defaults = { spend: 0, sales: 0, acos: 0, roas: 0, impressions: 0, clicks: 0, cpc: 0, ctr: 0, cvr: 0 };
       return allDates.map(date => {
         const dateKey = date.toISOString().split('T')[0];
-        const data = dataMap.get(dateKey) || { spend: 0, sales: 0, acos: 0, roas: 0 };
+        const data = dataMap.get(dateKey) || defaults;
         
         return {
           date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          spend: data.spend,
-          sales: data.sales,
-          acos: data.acos,
-          roas: data.roas,
+          ...data,
         };
       });
     } else {
       // Weekly view: Generate all dates, then aggregate by week
       const allDates = generateDateRange(rangeStart, rangeEnd);
       
-      // Aggregate by week
       const weeklyData: Record<string, { 
         spend: number; 
         sales: number; 
+        impressions: number;
+        clicks: number;
+        orders: number;
         count: number;
         dates: Date[];
       }> = {};
       
+      const defaults = { spend: 0, sales: 0, acos: 0, roas: 0, impressions: 0, clicks: 0, cpc: 0, ctr: 0, cvr: 0 };
+
       allDates.forEach(date => {
-        // Get the start of the week (Sunday)
         const weekStart = new Date(date);
         weekStart.setDate(date.getDate() - date.getDay());
         weekStart.setHours(0, 0, 0, 0);
@@ -253,57 +259,56 @@ export default function CommandCenter() {
         
         if (!weeklyData[weekKey]) {
           weeklyData[weekKey] = { 
-            spend: 0, 
-            sales: 0, 
-            count: 0,
-            dates: []
+            spend: 0, sales: 0, impressions: 0, clicks: 0, orders: 0,
+            count: 0, dates: []
           };
         }
         
         const dateKey = date.toISOString().split('T')[0];
-        const data = dataMap.get(dateKey) || { spend: 0, sales: 0, acos: 0, roas: 0 };
-        
-        weeklyData[weekKey].spend += data.spend;
-        weeklyData[weekKey].sales += data.sales;
-        weeklyData[weekKey].count += 1;
-        weeklyData[weekKey].dates.push(new Date(date));
+        const data = dataMap.get(dateKey) || defaults;
+        const w = weeklyData[weekKey];
+        w.spend += data.spend;
+        w.sales += data.sales;
+        w.impressions += data.impressions;
+        w.clicks += data.clicks;
+        w.orders += Math.round(data.clicks * data.cvr / 100);
+        w.count += 1;
+        w.dates.push(new Date(date));
       });
       
       return Object.entries(weeklyData)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([weekKey, data]) => {
-          // Get min/max dates within the selected range for this week
           const datesInRange = data.dates.filter(d => d >= rangeStart && d <= rangeEnd);
+
+          const formatRange = (s: Date, e: Date) =>
+            `${s.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${e.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+
+          let dateLabel: string;
           if (datesInRange.length === 0) {
-            // Fallback to week boundaries if no dates in range
-            const weekStartDate = new Date(weekKey);
-            const weekEndDate = new Date(weekStartDate);
-            weekEndDate.setDate(weekStartDate.getDate() + 6);
-            return {
-              date: `${weekStartDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
-              spend: data.spend,
-              sales: data.sales,
-              acos: data.sales > 0 ? (data.spend / data.sales) * 100 : 0,
-              roas: data.spend > 0 ? data.sales / data.spend : 0,
-            };
+            const ws = new Date(weekKey);
+            const we = new Date(ws);
+            we.setDate(ws.getDate() + 6);
+            dateLabel = formatRange(ws, we);
+          } else {
+            const minDate = new Date(Math.min(...datesInRange.map(d => d.getTime())));
+            const maxDate = new Date(Math.max(...datesInRange.map(d => d.getTime())));
+            const displayStart = minDate < rangeStart ? rangeStart : minDate;
+            const displayEnd = maxDate > rangeEnd ? rangeEnd : maxDate;
+            dateLabel = formatRange(displayStart, displayEnd);
           }
-          
-          const minDate = new Date(Math.min(...datesInRange.map(d => d.getTime())));
-          const maxDate = new Date(Math.max(...datesInRange.map(d => d.getTime())));
-          
-          // Clamp to range boundaries
-          const displayStart = minDate < rangeStart ? rangeStart : minDate;
-          const displayEnd = maxDate > rangeEnd ? rangeEnd : maxDate;
-          
-          const avgAcos = data.sales > 0 ? (data.spend / data.sales) * 100 : 0;
-          const avgRoas = data.spend > 0 ? data.sales / data.spend : 0;
-          
+
           return {
-            date: `${displayStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${displayEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+            date: dateLabel,
             spend: data.spend,
             sales: data.sales,
-            acos: avgAcos,
-            roas: avgRoas,
+            acos: data.sales > 0 ? (data.spend / data.sales) * 100 : 0,
+            roas: data.spend > 0 ? data.sales / data.spend : 0,
+            impressions: data.impressions,
+            clicks: data.clicks,
+            cpc: data.clicks > 0 ? data.spend / data.clicks : 0,
+            ctr: data.impressions > 0 ? (data.clicks / data.impressions) * 100 : 0,
+            cvr: data.clicks > 0 ? (data.orders / data.clicks) * 100 : 0,
           };
         });
     }

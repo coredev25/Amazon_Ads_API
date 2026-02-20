@@ -1456,10 +1456,11 @@ export default function HierarchicalCampaignManager() {
             sales: typeof t.sales === 'number' ? t.sales : parseFloat(String(t.sales)) || 0,
             acos: typeof t.acos === 'number' ? t.acos : parseFloat(String(t.acos)) || 0,
             roas: typeof t.roas === 'number' ? t.roas : parseFloat(String(t.roas)) || 0,
-            impressions: typeof t.impressions === 'number' ? t.impressions : parseInt(String(t.impressions)) || undefined,
-            clicks: typeof t.clicks === 'number' ? t.clicks : parseInt(String(t.clicks)) || undefined,
-            cpc: typeof t.cpc === 'number' ? t.cpc : parseFloat(String(t.cpc)) || undefined,
-            ctr: typeof t.ctr === 'number' ? t.ctr : parseFloat(String(t.ctr)) || undefined,
+            impressions: typeof t.impressions === 'number' ? t.impressions : parseInt(String(t.impressions)) || 0,
+            clicks: typeof t.clicks === 'number' ? t.clicks : parseInt(String(t.clicks)) || 0,
+            cpc: typeof t.cpc === 'number' ? t.cpc : parseFloat(String(t.cpc)) || 0,
+            ctr: typeof t.ctr === 'number' ? t.ctr : parseFloat(String(t.ctr)) || 0,
+            cvr: typeof t.cvr === 'number' ? t.cvr : parseFloat(String(t.cvr)) || 0,
           }))}
           previousPeriodData={previousPeriodData}
           eventAnnotations={eventAnnotations}
