@@ -28,6 +28,7 @@ import {
   formatPercentage,
   cn,
 } from '@/utils/helpers';
+import * as XLSX from 'xlsx';
 
 export default function KeywordsPage() {
   const toast = useToast();
@@ -44,6 +45,7 @@ export default function KeywordsPage() {
   const [lockingKeyword, setLockingKeyword] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+  const [exporting, setExporting] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -108,6 +110,64 @@ export default function KeywordsPage() {
     if (stateFilter !== 'all' && k.state?.toLowerCase() !== stateFilter.toLowerCase()) return false;
     return true;
   });
+
+  const handleExport = async () => {
+    try {
+      setExporting(true);
+      toast.info('Exporting', 'Loading all keywords from database...');
+
+      const allKeywords: Keyword[] = [];
+      let currentPage = 1;
+      const batchSize = 200;
+      let totalPages = 1;
+
+      while (currentPage <= totalPages) {
+        const res = await fetchKeywords({ days, page: currentPage, page_size: batchSize });
+        allKeywords.push(...res.data);
+        totalPages = res.total_pages;
+        currentPage++;
+      }
+
+      const rows = allKeywords.map(k => ({
+        'Keyword': k.keyword_text,
+        'Match': k.match_type,
+        'State': k.state,
+        'Current Bid': k.bid ?? 0,
+        'AI Suggested': k.ai_suggested_bid ?? '',
+        'Spend': k.spend ?? 0,
+        'Sales': k.sales ?? 0,
+        'ACOS': k.acos != null ? `${k.acos}%` : '-',
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+
+      const colWidths = [
+        { wch: 35 }, // Keyword
+        { wch: 10 }, // Match
+        { wch: 10 }, // State
+        { wch: 12 }, // Current Bid
+        { wch: 14 }, // AI Suggested
+        { wch: 12 }, // Spend
+        { wch: 12 }, // Sales
+        { wch: 10 }, // ACOS
+      ];
+      ws['!cols'] = colWidths;
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Keywords');
+
+      const now = new Date();
+      const ts = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      XLSX.writeFile(wb, `keywords_${ts}.xlsx`);
+
+      toast.success('Export Complete', `${allKeywords.length} keywords exported`);
+    } catch (err) {
+      console.error('Export failed:', err);
+      toast.error('Export Failed', 'Could not export keywords');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleEditBid = (keyword: Keyword) => {
     if (keyword.is_locked) {
@@ -444,9 +504,9 @@ export default function KeywordsPage() {
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <button className="btn btn-secondary">
-              <Download className="w-4 h-4" />
-              Export
+            <button className="btn btn-secondary" onClick={handleExport} disabled={exporting}>
+              {exporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {exporting ? 'Exporting...' : 'Export'}
             </button>
           </div>
         </div>

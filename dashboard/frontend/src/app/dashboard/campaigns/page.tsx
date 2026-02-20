@@ -76,6 +76,7 @@ export default function HierarchicalCampaignManager() {
   // Pagination state per tab
   const [campaignPage, setCampaignPage] = useState(1);
   const [campaignPageSize, setCampaignPageSize] = useState(50);
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [adGroupPage, setAdGroupPage] = useState(1);
   const [adGroupPageSize, setAdGroupPageSize] = useState(50);
   const [adsPage, setAdsPage] = useState(1);
@@ -337,38 +338,59 @@ export default function HierarchicalCampaignManager() {
     URL.revokeObjectURL(link.href);
   }
 
-  const handleExportCsv = () => {
+  const handleExportCsv = async () => {
     const today = new Date().toISOString().split('T')[0];
-    const payload = (() => {
-      switch (activeTab) {
-        case 'portfolios':
-          return {
-            filename: `portfolios-${today}.csv`,
-            rows: filteredPortfolios.map(p => ({
-              portfolio_name: p.portfolio_name,
-              status: p.status,
-              campaign_count: p.campaign_count,
-              total_spend: p.total_spend,
-              total_sales: p.total_sales,
-              acos: p.acos,
-            })),
-          };
-        case 'campaigns':
-          return {
-            filename: `campaigns-${today}.csv`,
-            rows: filteredCampaigns.map(c => ({
-              campaign_name: c.campaign_name,
-              status: c.status,
-              spend: c.spend,
-              sales: c.sales,
-              acos: c.acos,
-              roas: c.roas,
-              orders: c.orders,
-              campaign_type: c.campaign_type,
-              portfolio_name: c.portfolio_name,
-            })),
-          };
-        case 'ad_groups':
+    let payload: { filename: string; rows: Record<string, unknown>[] };
+
+    if (activeTab === 'campaigns') {
+      setExportingCsv(true);
+      try {
+        const allCampaigns: Campaign[] = [];
+        let page = 1;
+        const pageSize = 200;
+        let totalPages = 1;
+        while (page <= totalPages) {
+          const res = await fetchCampaigns(days, portfolioFilter, page, pageSize, undefined);
+          allCampaigns.push(...res.data);
+          totalPages = res.total_pages;
+          page++;
+        }
+        const filtered = statusFilter === 'all'
+          ? allCampaigns
+          : allCampaigns.filter(c => c.status?.toLowerCase() === statusFilter.toLowerCase());
+        payload = {
+          filename: `campaigns-${today}.csv`,
+          rows: filtered.map(c => ({
+            campaign_name: c.campaign_name,
+            status: c.status,
+            spend: c.spend,
+            sales: c.sales,
+            acos: c.acos,
+            roas: c.roas,
+            orders: c.orders,
+            campaign_type: c.campaign_type,
+            portfolio_name: c.portfolio_name,
+          })),
+        };
+      } finally {
+        setExportingCsv(false);
+      }
+    } else {
+      payload = (() => {
+        switch (activeTab) {
+          case 'portfolios':
+            return {
+              filename: `portfolios-${today}.csv`,
+              rows: filteredPortfolios.map(p => ({
+                portfolio_name: p.portfolio_name,
+                status: p.status,
+                campaign_count: p.campaign_count,
+                total_spend: p.total_spend,
+                total_sales: p.total_sales,
+                acos: p.acos,
+              })),
+            };
+          case 'ad_groups':
           return {
             filename: `ad-groups-${today}.csv`,
             rows: filteredAdGroups.map(ag => ({
@@ -448,8 +470,9 @@ export default function HierarchicalCampaignManager() {
           };
         default:
           return { filename: `export-${today}.csv`, rows: [] };
-      }
-    })();
+        }
+      })();
+    }
     downloadCsv(payload.filename, payload.rows);
   };
 
@@ -651,13 +674,21 @@ export default function HierarchicalCampaignManager() {
                 <Settings className="w-4 h-4" />
               </button>
               <button
-                onClick={() => {
-                  handleExportCsv();
-                }}
+                onClick={() => handleExportCsv()}
                 className="btn btn-sm btn-secondary"
+                disabled={exportingCsv}
               >
-                <FileDown className="w-4 h-4" />
-                Export CSV
+                {exportingCsv ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Exporting...
+                  </>
+                ) : (
+                  <>
+                    <FileDown className="w-4 h-4" />
+                    Export CSV
+                  </>
+                )}
               </button>
             </div>
           </div>
