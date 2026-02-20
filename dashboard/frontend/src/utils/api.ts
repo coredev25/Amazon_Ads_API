@@ -906,7 +906,9 @@ export const fetchKeywords = async (params: {
   queryParams.append('page', (params.page || 1).toString());
   queryParams.append('page_size', (params.page_size || 50).toString());
   
+  let old  = Date.now();
   const response = await api.get(`/api/keywords?${queryParams.toString()}`);
+  console.log(`Keywords fetched in`, Date.now() - old);
   return response.data;
 };
 

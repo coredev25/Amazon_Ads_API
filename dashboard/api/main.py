@@ -1883,100 +1883,109 @@ async def get_keywords(
 ):
     """Get keywords with performance data"""
     try:
+        start_date = datetime.now() - timedelta(days=days)
+
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                filters = []
+                params: list = [start_date]
+
+                if campaign_id:
+                    filters.append("ag.campaign_id = %s")
+                    params.append(campaign_id)
+                if ad_group_id:
+                    filters.append("k.ad_group_id = %s")
+                    params.append(ad_group_id)
+
+                where_extra = (" AND " + " AND ".join(filters)) if filters else ""
+
+                cur.execute(f"""
+                    SELECT
+                        k.keyword_id, k.keyword_text, k.match_type, k.bid, k.state,
+                        k.ad_group_id, ag.campaign_id,
+                        COALESCE(SUM(kp.impressions), 0)::int as impressions,
+                        COALESCE(SUM(kp.clicks), 0)::int as clicks,
+                        COALESCE(SUM(kp.cost), 0) as spend,
+                        COALESCE(SUM(kp.attributed_sales_7d), 0) as sales,
+                        COALESCE(SUM(kp.attributed_conversions_7d), 0)::int as orders
+                    FROM keywords k
+                    JOIN ad_groups ag ON k.ad_group_id = ag.ad_group_id
+                    LEFT JOIN keyword_performance kp
+                        ON k.keyword_id = kp.keyword_id AND kp.report_date >= %s
+                    WHERE k.state = 'ENABLED'{where_extra}
+                    GROUP BY k.keyword_id, k.keyword_text, k.match_type, k.bid, k.state,
+                             k.ad_group_id, ag.campaign_id
+                    ORDER BY spend DESC
+                    LIMIT %s
+                """, params + [limit])
+                rows = cur.fetchall()
+
+                if not rows:
+                    return {"data": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
+
+                kw_ids = [r['keyword_id'] for r in rows]
+
+                cur.execute("""
+                    SELECT entity_id, locked_until, lock_reason
+                    FROM bid_adjustment_locks
+                    WHERE entity_type = 'keyword' AND locked_until > NOW()
+                      AND entity_id = ANY(%s)
+                """, (kw_ids,))
+                bid_locks = {r['entity_id']: r['lock_reason'] for r in cur.fetchall()}
+
+                cur.execute("""
+                    SELECT DISTINCT ON (entity_id) entity_id, new_bid, reason
+                    FROM bid_change_history
+                    WHERE entity_type = 'keyword' AND entity_id = ANY(%s)
+                    ORDER BY entity_id, change_date DESC
+                """, (kw_ids,))
+                last_changes = {r['entity_id']: r for r in cur.fetchall()}
+
         all_keywords = []
-        
-        # Get campaigns to iterate through
-        if campaign_id:
-            campaign_ids = [campaign_id]
-        else:
-            campaigns = db_connector.get_campaigns_with_performance(days)
-            campaign_ids = [c['campaign_id'] for c in campaigns]
-        
-        # Get bid locks for lookup
-        bid_locks = {}
-        try:
-            with db_connector.get_connection() as conn:
-                import psycopg2.extras
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                    cursor.execute("""
-                        SELECT entity_id, locked_until, lock_reason 
-                        FROM bid_adjustment_locks 
-                        WHERE entity_type = 'keyword' AND locked_until > NOW()
-                    """)
-                    for row in cursor.fetchall():
-                        bid_locks[row['entity_id']] = {
-                            'locked_until': row['locked_until'],
-                            'lock_reason': row['lock_reason']
-                        }
-        except Exception as e:
-            logger.warning(f"Could not get bid locks: {e}")
-        
-        for cid in campaign_ids:
-            ad_groups = db_connector.get_ad_groups_with_performance(cid, days)
-            
-            for ag in ad_groups:
-                if ad_group_id and ag['ad_group_id'] != ad_group_id:
-                    continue
-                    
-                keywords = db_connector.get_keywords_with_performance(ag['ad_group_id'], days)
-                
-                for kw in keywords:
-                    spend = float(kw.get('total_cost', 0) or 0)
-                    sales = float(kw.get('total_sales', 0) or 0)
-                    impressions = int(kw.get('total_impressions', 0) or 0)
-                    clicks = int(kw.get('total_clicks', 0) or 0)
-                    orders = int(kw.get('total_conversions', 0) or 0)
-                    
-                    # Get AI suggested bid if available
-                    ai_bid = None
-                    confidence = None
-                    reason = None
-                    
-                    # Check for recent bid change recommendations
-                    last_change = db_connector.get_last_bid_change('keyword', kw['keyword_id'])
-                    if last_change:
-                        ai_bid = float(last_change.get('new_bid', 0))
-                        reason = last_change.get('reason', '')
-                    
-                    # Check if locked
-                    is_locked = kw['keyword_id'] in bid_locks
-                    lock_reason = bid_locks.get(kw['keyword_id'], {}).get('lock_reason')
-                    
-                    all_keywords.append(KeywordData(
-                        keyword_id=kw['keyword_id'],
-                        keyword_text=kw['keyword_text'],
-                        match_type=kw.get('match_type', 'BROAD'),
-                        campaign_id=cid,
-                        ad_group_id=ag['ad_group_id'],
-                        bid=float(kw.get('bid', 0) or 0),
-                        state=kw.get('state', 'ENABLED'),
-                        spend=round(spend, 2),
-                        sales=round(sales, 2),
-                        acos=round(spend / sales * 100, 2) if sales > 0 else None,
-                        roas=round(sales / spend, 2) if spend > 0 else None,
-                        orders=orders,
-                        impressions=impressions,
-                        clicks=clicks,
-                        ctr=round(clicks / impressions * 100, 2) if impressions > 0 else 0,
-                        cvr=round(orders / clicks * 100, 2) if clicks > 0 else 0,
-                        ai_suggested_bid=ai_bid,
-                        confidence_score=confidence,
-                        reason=reason,
-                        is_locked=is_locked,
-                        lock_reason=lock_reason
-                    ))
-            
-            if len(all_keywords) >= limit:
-                break
-        
-        all_keywords = all_keywords[:limit]
+        for r in rows:
+            spend = float(r['spend'] or 0)
+            sales = float(r['sales'] or 0)
+            impressions = int(r['impressions'] or 0)
+            clicks = int(r['clicks'] or 0)
+            orders = int(r['orders'] or 0)
+            kid = r['keyword_id']
+
+            lc = last_changes.get(kid)
+            ai_bid = float(lc['new_bid']) if lc else None
+            reason = lc['reason'] if lc else None
+
+            all_keywords.append(KeywordData(
+                keyword_id=kid,
+                keyword_text=r['keyword_text'],
+                match_type=r.get('match_type', 'BROAD'),
+                campaign_id=r['campaign_id'],
+                ad_group_id=r['ad_group_id'],
+                bid=float(r.get('bid', 0) or 0),
+                state=r.get('state', 'ENABLED'),
+                spend=round(spend, 2),
+                sales=round(sales, 2),
+                acos=round(spend / sales * 100, 2) if sales > 0 else None,
+                roas=round(sales / spend, 2) if spend > 0 else None,
+                orders=orders,
+                impressions=impressions,
+                clicks=clicks,
+                ctr=round(clicks / impressions * 100, 2) if impressions > 0 else 0,
+                cvr=round(orders / clicks * 100, 2) if clicks > 0 else 0,
+                ai_suggested_bid=ai_bid,
+                confidence_score=None,
+                reason=reason,
+                is_locked=kid in bid_locks,
+                lock_reason=bid_locks.get(kid)
+            ))
+
         total = len(all_keywords)
         total_pages = max(1, (total + page_size - 1) // page_size)
-        start = (page - 1) * page_size
-        end = start + page_size
-        
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+
         return {
-            "data": all_keywords[start:end],
+            "data": all_keywords[start_idx:end_idx],
             "total": total,
             "page": page,
             "page_size": page_size,
