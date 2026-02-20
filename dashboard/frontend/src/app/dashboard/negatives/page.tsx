@@ -346,44 +346,62 @@ export default function NegativesPage() {
         </div>
       </div>
 
-      {/* Severity Distribution Chart */}
-      {candidates && candidates.length > 0 && (
-        <div className="card p-6 animate-fade-in-up">
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Severity Distribution</h3>
-          <div className="flex items-center gap-8">
-            <DonutChart
-              data={[
-                { name: 'Critical', value: candidates.filter(c => c.severity === 'critical').length, color: '#EF4444' },
-                { name: 'High', value: candidates.filter(c => c.severity === 'high').length, color: '#F97316' },
-                { name: 'Medium', value: candidates.filter(c => c.severity === 'medium').length, color: '#F59E0B' },
-                { name: 'Low', value: candidates.filter(c => c.severity === 'low').length, color: '#6B7280' },
-              ]}
-              height={160}
-              innerRadius={40}
-              outerRadius={65}
-              centerLabel="Total"
-              centerValue={String(candidates.length)}
-            />
-            <div className="flex-1 grid grid-cols-2 gap-3">
-              {[
-                { label: 'Critical', count: candidates.filter(c => c.severity === 'critical').length, spend: candidates.filter(c => c.severity === 'critical').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-red-500', text: 'text-red-500' },
-                { label: 'High', count: candidates.filter(c => c.severity === 'high').length, spend: candidates.filter(c => c.severity === 'high').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-orange-500', text: 'text-orange-500' },
-                { label: 'Medium', count: candidates.filter(c => c.severity === 'medium').length, spend: candidates.filter(c => c.severity === 'medium').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-amber-500', text: 'text-amber-500' },
-                { label: 'Low', count: candidates.filter(c => c.severity === 'low').length, spend: candidates.filter(c => c.severity === 'low').reduce((s, c) => s + (c.spend || 0), 0), color: 'bg-gray-500', text: 'text-gray-500' },
-              ].map(item => (
-                <div key={item.label} className="card p-3 hover-glow">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className={cn('w-2.5 h-2.5 rounded-full', item.color)} />
-                    <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{item.label}</span>
-                    <span className={cn('text-xs font-bold ml-auto', item.text)}>{item.count}</span>
-                  </div>
-                  <p className="text-[10px] text-gray-400">Wasted: {formatCurrency(item.spend)}</p>
-                </div>
-              ))}
+      {/* Severity Distribution */}
+      {candidates && candidates.length > 0 && (() => {
+        const total = candidates.length;
+        const severities = [
+          { key: 'critical', label: 'Critical', color: '#EF4444', bg: 'bg-red-500', bgFaint: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-400' },
+          { key: 'high', label: 'High', color: '#F97316', bg: 'bg-orange-500', bgFaint: 'bg-orange-500/10', border: 'border-orange-500/30', text: 'text-orange-400' },
+          { key: 'medium', label: 'Medium', color: '#F59E0B', bg: 'bg-amber-500', bgFaint: 'bg-amber-500/10', border: 'border-amber-500/30', text: 'text-amber-400' },
+          { key: 'low', label: 'Low', color: '#6B7280', bg: 'bg-gray-500', bgFaint: 'bg-gray-500/10', border: 'border-gray-500/30', text: 'text-gray-400' },
+        ].map(s => ({
+          ...s,
+          count: candidates.filter(c => c.severity === s.key).length,
+          spend: candidates.filter(c => c.severity === s.key).reduce((sum, c) => sum + (c.spend || 0), 0),
+        }));
+
+        return (
+          <div className="card p-6 animate-fade-in-up">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-5">Severity Distribution</h3>
+            <div className="grid grid-cols-1 lg:grid-cols-[180px_1fr] gap-6 items-center">
+              <DonutChart
+                data={severities.map(s => ({ name: s.label, value: s.count, color: s.color }))}
+                height={180}
+                innerRadius={50}
+                outerRadius={75}
+                centerLabel="Total"
+                centerValue={String(total)}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                {severities.map(item => {
+                  const pct = total > 0 ? (item.count / total) * 100 : 0;
+                  return (
+                    <div key={item.label} className={cn('rounded-xl border p-4 transition-all hover:scale-[1.02]', item.border, item.bgFaint)}>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className={cn('w-2.5 h-2.5 rounded-full', item.bg)} />
+                          <span className="text-sm font-medium text-gray-200">{item.label}</span>
+                        </div>
+                        <span className={cn('text-lg font-bold tabular-nums', item.text)}>{item.count}</span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-gray-700/50 mb-2 overflow-hidden">
+                        <div
+                          className={cn('h-full rounded-full transition-all duration-500', item.bg)}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-400">Wasted Spend</span>
+                        <span className={cn('text-xs font-semibold tabular-nums', item.text)}>{formatCurrency(item.spend)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Info Banner */}
       <div className="alert alert-info">
