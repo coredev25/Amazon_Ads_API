@@ -260,7 +260,7 @@ export default function ProductTargetingPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className="label">Date Range</label>
-            <DateRangePicker value={dateRange} onChange={setDateRange} />
+            <DateRangePicker value={dateRange} onChange={setDateRange} className="w-full"/>
           </div>
           <div>
             <label className="label">Targeting Type</label>

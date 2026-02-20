@@ -398,7 +398,7 @@ export default function DateRangePicker({ value, onChange, className }: DateRang
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
-          'flex items-center gap-2.5 px-4 py-2.5 rounded-lg border transition-all duration-200',
+          'flex w-full items-center gap-2.5 px-4 py-2.5 rounded-lg border transition-all duration-200',
           'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600',
           'hover:border-amazon-orange/50 hover:bg-gray-50 dark:hover:bg-gray-700',
           'focus:outline-none focus:ring-2 focus:ring-amazon-orange/50 focus:border-amazon-orange',
@@ -412,14 +412,14 @@ export default function DateRangePicker({ value, onChange, className }: DateRang
         </span>
         <ChevronDown 
           className={cn(
-            'w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform duration-200 flex-shrink-0',
+            'absolute right-0 h-4 text-gray-500 dark:text-gray-400 transition-transform duration-200 flex-shrink-0',
             isOpen && 'rotate-180 text-amazon-orange'
           )} 
         />
       </button>
 
       {isOpen && (
-        <div className="absolute top-full right-0 mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-[100] overflow-hidden">
+        <div className="absolute top-full left-0 mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-[100] overflow-hidden">
           <div className="flex">
             {/* Left Panel - Predefined Options */}
             <div className="w-64 border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
