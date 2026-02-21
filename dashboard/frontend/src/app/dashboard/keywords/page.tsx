@@ -49,17 +49,28 @@ export default function KeywordsPage() {
 
   const queryClient = useQueryClient();
 
-  // Reset to page 1 when date range changes
+  // Reset to page 1 when date range or filters change
   useEffect(() => {
     setPage(1);
   }, [dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString()]);
+  useEffect(() => {
+    setPage(1);
+  }, [matchTypeFilter, stateFilter]);
 
   // Calculate days from dateRange
   const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
 
   const { data: keywordsResponse, isLoading, refetch } = useQuery({
-    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), page, pageSize, urlKeywordId],
-    queryFn: () => fetchKeywords({ days, page, page_size: pageSize, ...(urlKeywordId ? { keyword_id: urlKeywordId } : {}) }),
+    queryKey: ['keywords', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), page, pageSize, urlKeywordId, stateFilter, matchTypeFilter],
+    queryFn: () =>
+      fetchKeywords({
+        days,
+        page,
+        page_size: pageSize,
+        ...(urlKeywordId ? { keyword_id: urlKeywordId } : {}),
+        ...(stateFilter && stateFilter !== 'all' ? { state: stateFilter } : {}),
+        ...(matchTypeFilter && matchTypeFilter !== 'all' ? { match_type: matchTypeFilter } : {}),
+      }),
   });
 
   const keywords = keywordsResponse?.data;
@@ -105,11 +116,8 @@ export default function KeywordsPage() {
     },
   });
 
-  const filteredKeywords = keywords?.filter((k) => {
-    if (matchTypeFilter !== 'all' && k.match_type?.toLowerCase() !== matchTypeFilter.toLowerCase()) return false;
-    if (stateFilter !== 'all' && k.state?.toLowerCase() !== stateFilter.toLowerCase()) return false;
-    return true;
-  });
+  // Match type and state are applied server-side; no client-side filter needed
+  const filteredKeywords = keywords ?? [];
 
   const handleExport = async () => {
     try {
@@ -122,7 +130,13 @@ export default function KeywordsPage() {
       let totalPages = 1;
 
       while (currentPage <= totalPages) {
-        const res = await fetchKeywords({ days, page: currentPage, page_size: batchSize });
+        const res = await fetchKeywords({
+          days,
+          page: currentPage,
+          page_size: batchSize,
+          ...(stateFilter && stateFilter !== 'all' ? { state: stateFilter } : {}),
+          ...(matchTypeFilter && matchTypeFilter !== 'all' ? { match_type: matchTypeFilter } : {}),
+        });
         allKeywords.push(...res.data);
         totalPages = res.total_pages;
         currentPage++;
@@ -218,11 +232,12 @@ export default function KeywordsPage() {
     {
       key: 'keyword_text',
       header: 'Keyword',
+      width: 320,
       sortable: true,
       render: (value: unknown, row: Keyword) => (
-        <div className="max-w-xs">
-          <div className="flex items-center gap-2">
-            <p className="font-medium text-gray-900 dark:text-white truncate">{row.keyword_text}</p>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <p className="font-medium text-gray-900 dark:text-white truncate min-w-0" title={row.keyword_text}>{row.keyword_text}</p>
             {row.is_locked && (
               <span title={row.lock_reason || 'Locked'}>
                 <Lock className="w-3 h-3 text-amber-400 flex-shrink-0" />
@@ -230,7 +245,7 @@ export default function KeywordsPage() {
             )}
           </div>
           {row.is_locked && (
-            <p className="text-xs text-amber-400/80 truncate">{row.lock_reason}</p>
+            <p className="text-xs text-amber-400/80 truncate min-w-0" title={row.lock_reason ?? undefined}>{row.lock_reason}</p>
           )}
         </div>
       ),

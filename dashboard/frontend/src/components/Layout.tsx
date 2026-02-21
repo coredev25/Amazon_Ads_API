@@ -224,7 +224,11 @@ export default function Layout({ children }: LayoutProps) {
     } else if (result.type === 'keyword') {
       router.push(`/dashboard/keywords?keyword_id=${result.id}`);
     } else if (result.type === 'ad_group') {
-      router.push(`/dashboard/campaigns?ad_group_id=${result.id}`);
+      const params = new URLSearchParams();
+      if (result.campaign_id != null) params.set('campaign_id', String(result.campaign_id));
+      params.set('ad_group_id', String(result.id));
+      if (result.name) params.set('ad_group_name', result.name);
+      router.push(`/dashboard/campaigns?${params.toString()}`);
     }
   };
 

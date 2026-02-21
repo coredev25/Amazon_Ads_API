@@ -134,6 +134,26 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   } | null>(null);
   const [promptValue, setPromptValue] = useState('');
   const promptInputRef = useRef<HTMLInputElement>(null);
+  const statusFilterScrollRef = useRef<number | null>(null);
+  const pageSizeScrollRef = useRef<number | null>(null);
+
+  const getMainScrollTop = () => {
+    const main = document.querySelector('main');
+    const scrollEl = main?.children[1] as HTMLElement | undefined;
+    return scrollEl ? scrollEl.scrollTop : (typeof window !== 'undefined' ? window.scrollY : 0);
+  };
+  const setMainScrollTop = (top: number) => {
+    const main = document.querySelector('main');
+    const scrollEl = main?.children[1] as HTMLElement | undefined;
+    if (scrollEl) scrollEl.scrollTop = top;
+    else if (typeof window !== 'undefined') window.scrollTo(0, top);
+  };
+  const restoreScrollAfterUpdate = (saved: number | null) => {
+    if (saved == null) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setMainScrollTop(saved));
+    });
+  };
 
   const openPromptDialog = (opts: {
     title: string;
@@ -179,7 +199,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
           const parsed = JSON.parse(savedLayout);
           setColumnVisibility(parsed.visibility || columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: true }), {}));
           setColumnOrder(parsed.order?.length > 0 ? parsed.order : columns.map(c => String(c.key)));
-          setColumnWidths(parsed.widths || columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: col.width || 150 }), {}));
+          setColumnWidths(parsed.widths || columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: col.width || 200 }), {}));
           return;
         }
       } catch (e) {
@@ -189,7 +209,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
       // Default initialization
       setColumnVisibility(columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: true }), {}));
       setColumnOrder(columns.map(c => String(c.key)));
-      setColumnWidths(columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: col.width || 150 }), {}));
+      setColumnWidths(columns.reduce((acc, col) => ({ ...acc, [String(col.key)]: col.width || 200 }), {}));
     }
   }, [columns, columnLayout, gridLayoutKey]);
 
@@ -516,7 +536,14 @@ export default function SmartGrid<T extends Record<string, unknown>>({
               <Filter className="w-4 h-4 text-gray-400" />
               <select
                 value={statusFilter}
-                onChange={(e) => onStatusFilterChange(e.target.value)}
+                onFocus={() => { statusFilterScrollRef.current = getMainScrollTop(); }}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  onStatusFilterChange(value);
+                  const saved = statusFilterScrollRef.current;
+                  statusFilterScrollRef.current = null;
+                  restoreScrollAfterUpdate(saved);
+                }}
                 className="select text-sm"
               >
                 {statusFilterOptions.map(option => (
@@ -718,8 +745,8 @@ export default function SmartGrid<T extends Record<string, unknown>>({
 
       {/* Table */}
       <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table ref={tableRef} className="w-full border-collapse">
+        <div className="overflow-x-auto pr-4 md:pr-6">
+          <table ref={tableRef} className="w-full min-w-full table-fixed border-collapse">
             <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
               <tr>
                 {enableSelection && (
@@ -769,7 +796,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                 )}
                 {visibleColumns.map((column, index) => {
                   const columnKey = String(column.key);
-                  const width = columnWidths[columnKey] || column.width || 150;
+                  const width = columnWidths[columnKey] || column.width || 200;
                   const hasFilter = columnFilters[columnKey];
                   const isLastColumn = index === visibleColumns.length - 1;
                   
@@ -777,7 +804,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                     <th
                       key={columnKey}
                       className={cn(
-                        'px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider relative',
+                        'px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider relative overflow-hidden',
                         column.className,
                         !isLastColumn && 'border-r border-gray-200 dark:border-gray-700'
                       )}
@@ -789,11 +816,11 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                       }}
                       onDrop={() => handleColumnDrop(columnKey)}
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0 overflow-hidden">
                         <button
                           onClick={() => column.sortable && handleSort(columnKey)}
                           className={cn(
-                            'flex-1 text-left flex items-center gap-1',
+                            'flex-1 min-w-0 text-left flex items-center gap-1 truncate',
                             column.sortable && 'hover:text-amazon-orange cursor-pointer'
                           )}
                         >
@@ -980,14 +1007,14 @@ export default function SmartGrid<T extends Record<string, unknown>>({
                         const columnKey = String(column.key);
                         const value = row[column.key as keyof T];
                         const isCellEditing = isEditing && editingCell?.column === columnKey;
-                        const width = columnWidths[columnKey] || column.width || 150;
+                        const width = columnWidths[columnKey] || column.width || 200;
                         const isLastColumn = colIndex === visibleColumns.length - 1;
 
                         return (
                           <td
                             key={columnKey}
                             className={cn(
-                              'px-4 py-3 relative',
+                              'px-4 py-3 relative overflow-hidden min-w-0',
                               column.className,
                               !isLastColumn && 'border-r border-gray-200 dark:border-gray-700'
                             )}
@@ -1229,7 +1256,14 @@ export default function SmartGrid<T extends Record<string, unknown>>({
             <span className="text-sm text-gray-600 dark:text-gray-400">Rows:</span>
             <select
               value={pagination.pageSize}
-              onChange={(e) => onPageSizeChange?.(Number(e.target.value))}
+              onFocus={() => { pageSizeScrollRef.current = getMainScrollTop(); }}
+              onChange={(e) => {
+                const size = Number(e.target.value);
+                onPageSizeChange?.(size);
+                const saved = pageSizeScrollRef.current;
+                pageSizeScrollRef.current = null;
+                restoreScrollAfterUpdate(saved);
+              }}
               className="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amazon-orange/50 focus:border-amazon-orange transition-colors"
             >
               {[25, 50, 100].map(size => (

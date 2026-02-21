@@ -217,18 +217,34 @@ class DatabaseConnector:
                 cursor.execute(query, (keyword_id, start_date))
                 return cursor.fetchall()
     
-    def get_campaigns_with_performance(self, days_back: int = 7, portfolio_id: Optional[int] = None, campaign_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_campaigns_with_performance(
+        self,
+        days_back: int = 7,
+        portfolio_id: Optional[int] = None,
+        campaign_id: Optional[int] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Get all campaigns with their performance data
-        
+        Get all campaigns with their performance data.
+
         Args:
-            days_back: Number of days to look back
+            days_back: Number of days to look back (used when start_date/end_date not provided)
             portfolio_id: Optional portfolio ID to filter campaigns
             campaign_id: Optional campaign ID to filter a single campaign
-            
-        Returns:
-            List of campaigns with aggregated performance
+            start_date: Optional start of date range (overrides days_back when set with end_date)
+            end_date: Optional end of date range
         """
+        use_range = start_date is not None and end_date is not None
+        if use_range:
+            date_join = " AND cp.report_date >= %s AND cp.report_date <= %s"
+            params = [start_date, end_date]
+        else:
+            _start = datetime.now() - timedelta(days=days_back)
+            date_join = " AND cp.report_date >= %s"
+            params = [_start]
+
         query = """
         SELECT 
             c.campaign_id,
@@ -259,15 +275,14 @@ class DatabaseConnector:
                 ELSE 0 
             END as avg_ctr
         FROM campaigns c
-        LEFT JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id 
-            AND cp.report_date >= %s
+        LEFT JOIN campaign_performance cp ON c.campaign_id = cp.campaign_id
+            """ + date_join + """
         LEFT JOIN portfolios p ON c.portfolio_id = p.portfolio_id
-        WHERE c.campaign_status = 'ENABLED'
+        WHERE (1=1)
         """
-        
-        params = []
-        start_date = datetime.now() - timedelta(days=days_back)
-        params.append(start_date)
+        if status and status.lower() in ('enabled', 'paused', 'archived'):
+            query += " AND c.campaign_status = %s"
+            params.append(status.upper())
         
         if campaign_id is not None:
             query += " AND c.campaign_id = %s"
@@ -287,7 +302,13 @@ class DatabaseConnector:
                 cursor.execute(query, params)
                 return cursor.fetchall()
     
-    def get_ad_groups_with_performance(self, campaign_id: int, days_back: int = 7, min_impressions: int = 0) -> List[Dict[str, Any]]:
+    def get_ad_groups_with_performance(
+        self,
+        campaign_id: int,
+        days_back: int = 7,
+        min_impressions: int = 0,
+        state: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Get ad groups for a campaign with their performance data
         
@@ -295,6 +316,7 @@ class DatabaseConnector:
             campaign_id: Campaign ID
             days_back: Number of days to look back
             min_impressions: Minimum impressions threshold (0 = show all)
+            state: Optional filter by state (ENABLED, PAUSED, ARCHIVED). None = all.
             
         Returns:
             List of ad groups with aggregated performance
@@ -327,11 +349,18 @@ class DatabaseConnector:
         LEFT JOIN ad_group_performance agp ON ag.ad_group_id = agp.ad_group_id 
             AND agp.report_date >= %s
         WHERE ag.campaign_id = %s
-        GROUP BY ag.ad_group_id, ag.ad_group_name, ag.campaign_id, ag.default_bid, ag.state
         """
         
         start_date = datetime.now() - timedelta(days=days_back)
         params: list = [start_date, campaign_id]
+        
+        if state and state.upper() in ("ENABLED", "PAUSED", "ARCHIVED"):
+            query += " AND ag.state = %s"
+            params.append(state.upper())
+        
+        query += """
+        GROUP BY ag.ad_group_id, ag.ad_group_name, ag.campaign_id, ag.default_bid, ag.state
+        """
         
         if min_impressions > 0:
             query += " HAVING COALESCE(SUM(agp.impressions), 0) >= %s"

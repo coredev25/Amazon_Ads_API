@@ -1078,35 +1078,35 @@ async def switch_account(
 
 
 @app.get("/api/overview/metrics", response_model=OverviewMetrics)
-async def get_overview_metrics(days: int = Query(7, ge=1, le=90)):
-    """Get overview metrics for the Command Center"""
+async def get_overview_metrics(
+    days: Optional[int] = Query(None, ge=1, le=365),
+    start_date: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
+):
+    """Get overview metrics for the Command Center. Use either days or start_date+end_date."""
     try:
-        # Get current period metrics
-        campaigns = db_connector.get_campaigns_with_performance(days)
-        
-        # Aggregate metrics for current period
-        total_spend = sum(float(c.get('total_cost', 0) or 0) for c in campaigns)
-        total_sales = sum(float(c.get('total_sales', 0) or 0) for c in campaigns)
-        total_impressions = sum(int(c.get('total_impressions', 0) or 0) for c in campaigns)
-        total_clicks = sum(int(c.get('total_clicks', 0) or 0) for c in campaigns)
-        total_orders = sum(int(c.get('total_conversions', 0) or 0) for c in campaigns)
-        
-        acos = (total_spend / total_sales * 100) if total_sales > 0 else 0
-        roas = (total_sales / total_spend) if total_spend > 0 else 0
-        ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
-        cvr = (total_orders / total_clicks * 100) if total_clicks > 0 else 0
-        cpc = (total_spend / total_clicks) if total_clicks > 0 else 0
-        
-        # Get previous period metrics for comparison (days*2 to days ago)
-        prev_start_date = datetime.now() - timedelta(days=days * 2)
-        prev_end_date = datetime.now() - timedelta(days=days)
-        
-        prev_total_spend = 0
-        prev_total_sales = 0
-        prev_total_impressions = 0
-        prev_total_clicks = 0
-        prev_total_orders = 0
-        
+        now = datetime.now()
+        use_date_range = start_date and end_date
+        if use_date_range:
+            try:
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d').replace(hour=0, minute=0, second=0, microsecond=0)
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59, microsecond=999999)
+                if start_dt > end_dt:
+                    raise HTTPException(status_code=400, detail="Start date must be before or equal to end date")
+                if end_dt > now:
+                    end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+        else:
+            d = days if days is not None else 7
+            end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start_dt = (now - timedelta(days=d - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+        total_spend = 0.0
+        total_sales = 0.0
+        total_impressions = 0
+        total_clicks = 0
+        total_orders = 0
         try:
             with db_connector.get_connection() as conn:
                 import psycopg2.extras
@@ -1121,9 +1121,53 @@ async def get_overview_metrics(days: int = Query(7, ge=1, le=90)):
                         FROM campaign_performance cp
                         INNER JOIN campaigns c ON cp.campaign_id = c.campaign_id
                         WHERE c.campaign_status = 'ENABLED'
-                            AND cp.report_date >= %s 
-                            AND cp.report_date < %s
-                    """, (prev_start_date, prev_end_date))
+                            AND cp.report_date >= %s
+                            AND cp.report_date <= %s
+                    """, (start_dt, end_dt))
+                    row = cursor.fetchone()
+                    if row:
+                        total_impressions = int(row['total_impressions'] or 0)
+                        total_clicks = int(row['total_clicks'] or 0)
+                        total_spend = float(row['total_cost'] or 0)
+                        total_orders = int(row['total_conversions'] or 0)
+                        total_sales = float(row['total_sales'] or 0)
+        except Exception as e:
+            logger.warning(f"Could not get current period metrics: {e}")
+
+        acos = (total_spend / total_sales * 100) if total_sales > 0 else 0
+        roas = (total_sales / total_spend) if total_spend > 0 else 0
+        ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+        cvr = (total_orders / total_clicks * 100) if total_clicks > 0 else 0
+        cpc = (total_spend / total_clicks) if total_clicks > 0 else 0
+
+        period_length_days = max(1, (end_dt - start_dt).days + 1)
+        prev_end_dt = start_dt - timedelta(days=1)
+        prev_end_dt = prev_end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        prev_start_dt = prev_end_dt - timedelta(days=period_length_days - 1)
+        prev_start_dt = prev_start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        prev_total_spend = 0.0
+        prev_total_sales = 0.0
+        prev_total_impressions = 0
+        prev_total_clicks = 0
+        prev_total_orders = 0
+        try:
+            with db_connector.get_connection() as conn:
+                import psycopg2.extras
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                    cursor.execute("""
+                        SELECT 
+                            COALESCE(SUM(cp.impressions), 0) as total_impressions,
+                            COALESCE(SUM(cp.clicks), 0) as total_clicks,
+                            COALESCE(SUM(cp.cost), 0) as total_cost,
+                            COALESCE(SUM(cp.attributed_conversions_7d), 0) as total_conversions,
+                            COALESCE(SUM(cp.attributed_sales_7d), 0) as total_sales
+                        FROM campaign_performance cp
+                        INNER JOIN campaigns c ON cp.campaign_id = c.campaign_id
+                        WHERE c.campaign_status = 'ENABLED'
+                            AND cp.report_date >= %s
+                            AND cp.report_date <= %s
+                    """, (prev_start_dt, prev_end_dt))
                     result = cursor.fetchone()
                     if result:
                         prev_total_impressions = int(result['total_impressions'] or 0)
@@ -1689,14 +1733,30 @@ async def get_ai_insights(days: int = Query(7, ge=1, le=90)):
 @app.get("/api/campaigns")
 async def get_campaigns(
     campaign_id: Optional[int] = Query(None, description="Filter by campaign ID"),
-    days: int = Query(7, ge=1, le=90),
+    days: Optional[int] = Query(None, ge=1, le=365),
+    start_date: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
+    status: Optional[str] = Query(None, description="Filter by status: enabled, paused, archived, or omit for all"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=10, le=200, description="Items per page"),
 ):
-    """Get campaigns with performance data (paginated)"""
+    """Get campaigns with performance data (paginated). Use either days or start_date+end_date."""
     try:
-        campaigns = db_connector.get_campaigns_with_performance(days, portfolio_id, campaign_id)
+        start_dt = end_dt = None
+        if start_date and end_date:
+            try:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+                if start_dt > end_dt:
+                    raise HTTPException(status_code=400, detail="Start date must be before or equal to end date")
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+        d = days if days is not None else 7
+        status_filter = None if (not status or status.lower() == "all") else status
+        campaigns = db_connector.get_campaigns_with_performance(
+            d, portfolio_id, campaign_id, start_date=start_dt, end_date=end_dt, status=status_filter
+        )
         
         all_results = []
         for campaign in campaigns:
@@ -1896,6 +1956,8 @@ async def get_keywords(
     keyword_id: Optional[int] = None,
     campaign_id: Optional[int] = None,
     ad_group_id: Optional[int] = None,
+    state: Optional[str] = Query(None, description="Filter by state: enabled, paused, archived, or omit for all"),
+    match_type: Optional[str] = Query(None, description="Filter by match type: exact, phrase, broad, or omit for all"),
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200),
@@ -1908,8 +1970,16 @@ async def get_keywords(
         with db_connector.get_connection() as conn:
             import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                filters = ["k.state = 'ENABLED'"]
+                filters = []
                 params: list = [start_date]
+                if state and state.lower() in ("enabled", "paused", "archived"):
+                    filters.append("k.state = %s")
+                    params.append(state.upper())
+                if match_type and match_type.lower() in ("exact", "phrase", "broad"):
+                    filters.append("k.match_type = %s")
+                    params.append(match_type.upper())
+                if not filters:
+                    filters.append("(1=1)")
 
                 if keyword_id:
                     filters.append("k.keyword_id = %s")
@@ -3911,13 +3981,17 @@ async def get_ad_groups(
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    state: Optional[str] = Query(None, description="Filter by state: enabled, paused, archived, or omit for all"),
 ):
     """Get ad groups with performance data (paginated)"""
     try:
+        state_filter = None if (not state or state.lower() == "all") else state
         ad_groups = []
         if campaign_id:
             try:
-                ad_groups = db_connector.get_ad_groups_with_performance(campaign_id, days, min_impressions=0)
+                ad_groups = db_connector.get_ad_groups_with_performance(
+                    campaign_id, days, min_impressions=0, state=state_filter
+                )
             except Exception as db_err:
                 logger.warning(f"Error querying ad groups from performance method: {db_err}")
                 # Fallback: query ad_groups table directly without performance data
@@ -3925,15 +3999,20 @@ async def get_ad_groups(
                     with db_connector.get_connection() as conn:
                         import psycopg2.extras
                         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                            cursor.execute("""
+                            fallback_query = """
                                 SELECT ag.ad_group_id, ag.ad_group_name, ag.campaign_id,
                                        ag.default_bid, ag.state,
                                        0 as total_impressions, 0 as total_clicks,
                                        0 as total_cost, 0 as total_conversions, 0 as total_sales
                                 FROM ad_groups ag
                                 WHERE ag.campaign_id = %s
-                                ORDER BY ag.ad_group_name
-                            """, (campaign_id,))
+                            """
+                            fallback_params: list = [campaign_id]
+                            if state_filter and state_filter.lower() in ("enabled", "paused", "archived"):
+                                fallback_query += " AND ag.state = %s"
+                                fallback_params.append(state_filter.upper())
+                            fallback_query += " ORDER BY ag.ad_group_name"
+                            cursor.execute(fallback_query, fallback_params)
                             ad_groups = cursor.fetchall()
                 except Exception as fallback_err:
                     logger.error(f"Fallback ad groups query also failed: {fallback_err}")
@@ -4092,9 +4171,11 @@ async def get_ads(
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200),
+    state: Optional[str] = Query(None, description="Filter by state: enabled, paused, archived, or omit for all"),
 ):
     """Get product ads with performance data (paginated)"""
     try:
+        state_filter = None if (not state or state.lower() == "all") else state
         with db_connector.get_connection() as conn:
             import psycopg2.extras
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
@@ -4112,6 +4193,10 @@ async def get_ads(
                 if ad_group_id:
                     query += " AND pa.ad_group_id = %s"
                     params.append(ad_group_id)
+                
+                if state_filter and state_filter.lower() in ("enabled", "paused", "archived"):
+                    query += " AND pa.state = %s"
+                    params.append(state_filter.upper())
                 
                 cursor.execute(query, params)
                 ads = cursor.fetchall()

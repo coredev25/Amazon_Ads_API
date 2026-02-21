@@ -399,8 +399,19 @@ export interface EngineHistory {
 // API FUNCTIONS - OVERVIEW / COMMAND CENTER
 // ============================================================================
 
-export const fetchOverviewMetrics = async (days: number = 7): Promise<OverviewMetrics> => {
-  const response = await api.get(`/api/overview/metrics?days=${days}`);
+export const fetchOverviewMetrics = async (
+  days?: number,
+  startDate?: Date,
+  endDate?: Date
+): Promise<OverviewMetrics> => {
+  const params = new URLSearchParams();
+  if (startDate && endDate) {
+    params.append('start_date', startDate.toISOString().split('T')[0]);
+    params.append('end_date', endDate.toISOString().split('T')[0]);
+  } else {
+    params.append('days', String(days ?? 7));
+  }
+  const response = await api.get(`/api/overview/metrics?${params.toString()}`);
   return response.data;
 };
 
@@ -587,10 +598,26 @@ export const fetchAlerts = async (limit: number = 10): Promise<Alert[]> => {
 // API FUNCTIONS - CAMPAIGNS
 // ============================================================================
 
-export const fetchCampaigns = async (days: number = 7, portfolioId?: number, page: number = 1, pageSize: number = 50, campaignId?: number): Promise<PaginatedResponse<Campaign>> => {
-  const params = new URLSearchParams({ days: days.toString(), page: page.toString(), page_size: pageSize.toString() });
+export const fetchCampaigns = async (
+  days: number = 7,
+  portfolioId?: number,
+  page: number = 1,
+  pageSize: number = 50,
+  campaignId?: number,
+  startDate?: Date,
+  endDate?: Date,
+  status?: string
+): Promise<PaginatedResponse<Campaign>> => {
+  const params = new URLSearchParams({ page: page.toString(), page_size: pageSize.toString() });
+  if (startDate && endDate) {
+    params.append('start_date', startDate.toISOString().split('T')[0]);
+    params.append('end_date', endDate.toISOString().split('T')[0]);
+  } else {
+    params.append('days', days.toString());
+  }
   if (campaignId !== undefined) params.append('campaign_id', campaignId.toString());
   if (portfolioId !== undefined) params.append('portfolio_id', portfolioId.toString());
+  if (status && status.toLowerCase() !== 'all') params.append('status', status);
   const response = await api.get(`/api/campaigns?${params.toString()}`);
   return response.data;
 };
@@ -623,18 +650,33 @@ export const bulkAddCampaignsToPortfolio = async (campaignIds: number[], portfol
 };
 
 // Ad Groups
-export const fetchAdGroups = async (campaignId?: number, days: number = 7, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<AdGroup>> => {
+export const fetchAdGroups = async (
+  campaignId?: number,
+  days: number = 7,
+  page: number = 1,
+  pageSize: number = 50,
+  status?: string
+): Promise<PaginatedResponse<AdGroup>> => {
   const params = new URLSearchParams({ days: days.toString(), page: page.toString(), page_size: pageSize.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
+  if (status && status.toLowerCase() !== 'all') params.append('state', status);
   const response = await api.get(`/api/ad-groups?${params.toString()}`);
   return response.data;
 };
 
 // Ads (Product Ads/Creatives)
-export const fetchAds = async (campaignId?: number, adGroupId?: number, days: number = 7, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<any>> => {
+export const fetchAds = async (
+  campaignId?: number,
+  adGroupId?: number,
+  days: number = 7,
+  page: number = 1,
+  pageSize: number = 50,
+  status?: string
+): Promise<PaginatedResponse<any>> => {
   const params = new URLSearchParams({ days: days.toString(), page: page.toString(), page_size: pageSize.toString() });
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
+  if (status && status.toLowerCase() !== 'all') params.append('state', status);
   const response = await api.get(`/api/ads?${params.toString()}`);
   return response.data;
 };
@@ -903,18 +945,20 @@ export const fetchKeywords = async (params: {
   days?: number;
   page?: number;
   page_size?: number;
+  state?: string;
+  match_type?: string;
 }): Promise<PaginatedResponse<Keyword>> => {
   const queryParams = new URLSearchParams();
   if (params.keyword_id) queryParams.append('keyword_id', params.keyword_id.toString());
   if (params.campaign_id) queryParams.append('campaign_id', params.campaign_id.toString());
   if (params.ad_group_id) queryParams.append('ad_group_id', params.ad_group_id.toString());
   if (params.days) queryParams.append('days', params.days.toString());
+  if (params.state && params.state.toLowerCase() !== 'all') queryParams.append('state', params.state);
+  if (params.match_type && params.match_type.toLowerCase() !== 'all') queryParams.append('match_type', params.match_type);
   queryParams.append('page', (params.page || 1).toString());
   queryParams.append('page_size', (params.page_size || 50).toString());
-  
-  let old  = Date.now();
+
   const response = await api.get(`/api/keywords?${queryParams.toString()}`);
-  console.log(`Keywords fetched in`, Date.now() - old);
   return response.data;
 };
 

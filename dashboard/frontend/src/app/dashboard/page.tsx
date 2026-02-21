@@ -88,8 +88,13 @@ export default function CommandCenter() {
   const [dateRange, setDateRange] = useState<DateRange>(initialDateRange);
   const [timelineView, setTimelineView] = useState<'daily' | 'weekly'>('daily');
 
-  // Calculate days for metrics (for backward compatibility)
+  const refetchInterval = liveSettings.autoRefresh ? liveSettings.refreshInterval : undefined;
+
   const metricsDays = useMemo(() => {
+    if (dateRange.startDate && dateRange.endDate) {
+      const diff = dateRange.endDate.getTime() - dateRange.startDate.getTime();
+      return Math.max(1, Math.round(diff / (24 * 60 * 60 * 1000)) + 1);
+    }
     if (dateRange.days) return dateRange.days;
     if (dateRange.type === 'last_7_days') return 7;
     if (dateRange.type === 'last_14_days') return 14;
@@ -97,11 +102,20 @@ export default function CommandCenter() {
     return 7;
   }, [dateRange]);
 
-  const refetchInterval = liveSettings.autoRefresh ? liveSettings.refreshInterval : undefined;
-
   const { data: metrics, isLoading: metricsLoading, dataUpdatedAt } = useQuery({
-    queryKey: ['overview-metrics', metricsDays],
-    queryFn: () => fetchOverviewMetrics(metricsDays),
+    queryKey: [
+      'overview-metrics',
+      dateRange.type,
+      dateRange.startDate?.toISOString(),
+      dateRange.endDate?.toISOString(),
+      dateRange.days,
+    ],
+    queryFn: () =>
+      dateRange.startDate && dateRange.endDate
+        ? fetchOverviewMetrics(undefined, dateRange.startDate, dateRange.endDate)
+        : fetchOverviewMetrics(
+            dateRange.days ?? (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7)
+          ),
     refetchInterval,
   });
 

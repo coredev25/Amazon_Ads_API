@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/contexts/ToastContext';
@@ -23,6 +23,43 @@ import SmartGrid from '@/components/SmartGrid';
 import HierarchicalTabs, { type TabType } from '@/components/HierarchicalTabs';
 import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
 import MasterPerformanceChart, { type EventAnnotation } from '@/components/MasterPerformanceChart';
+
+function getChartDateRange(dateRange: DateRange): { start: Date; end: Date } | null {
+  if (dateRange.startDate && dateRange.endDate) {
+    return { start: new Date(dateRange.startDate), end: new Date(dateRange.endDate) };
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(today);
+  end.setHours(23, 59, 59, 999);
+  let start = new Date(today);
+  const type = dateRange.type;
+  if (type === 'last_7_days') start.setDate(start.getDate() - 6);
+  else if (type === 'last_14_days') start.setDate(start.getDate() - 13);
+  else if (type === 'last_30_days') start.setDate(start.getDate() - 29);
+  else if (type === 'today') { /* start = today */ }
+  else if (type === 'yesterday') { start.setDate(start.getDate() - 1); end.setDate(end.getDate() - 1); }
+  else if (type === 'this_week') start.setDate(today.getDate() - today.getDay());
+  else if (type === 'last_week') { start.setDate(today.getDate() - today.getDay() - 7); end.setDate(today.getDate() - today.getDay() - 1); }
+  else if (type === 'this_month') start = new Date(today.getFullYear(), today.getMonth(), 1);
+  else if (type === 'last_month') { start = new Date(today.getFullYear(), today.getMonth() - 1, 1); end.setTime(new Date(today.getFullYear(), today.getMonth(), 0).getTime()); end.setHours(23, 59, 59, 999); }
+  else if (type === 'year_to_date' || type === 'this_year') start = new Date(today.getFullYear(), 0, 1);
+  else if (type === 'lifetime') start = new Date(2020, 0, 1);
+  return { start, end };
+}
+
+function generateDateRange(start: Date, end: Date): Date[] {
+  const dates: Date[] = [];
+  const cur = new Date(start);
+  cur.setHours(0, 0, 0, 0);
+  const endCopy = new Date(end);
+  endCopy.setHours(23, 59, 59, 999);
+  while (cur <= endCopy) {
+    dates.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
 import InventoryBadge from '@/components/InventoryBadge';
 import {
   fetchCampaigns,
@@ -55,10 +92,26 @@ import {
   getStatusBadge,
 } from '@/utils/helpers';
 
+/** Preserve main content scroll position across dropdown/state updates to prevent scroll-to-top. */
+function preserveScroll(callback: () => void) {
+  const main = document.querySelector('main');
+  const scrollEl = main?.children[1] as HTMLElement | undefined;
+  const scrollTop = scrollEl?.scrollTop ?? (typeof window !== 'undefined' ? window.scrollY : 0);
+  callback();
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (scrollEl) scrollEl.scrollTop = scrollTop;
+      else if (typeof window !== 'undefined') window.scrollTo(0, scrollTop);
+    });
+  });
+}
+
 export default function HierarchicalCampaignManager() {
   const toast = useToast();
   const searchParams = useSearchParams();
   const urlCampaignId = searchParams.get('campaign_id') ? Number(searchParams.get('campaign_id')) : null;
+  const urlAdGroupId = searchParams.get('ad_group_id') ? Number(searchParams.get('ad_group_id')) : null;
+  const urlAdGroupName = searchParams.get('ad_group_name') ? decodeURIComponent(searchParams.get('ad_group_name')!) : '';
   const [activeTab, setActiveTab] = useState<TabType>('campaigns');
   const [dateRange, setDateRange] = useState<DateRange>({
     type: 'last_7_days',
@@ -85,29 +138,29 @@ export default function HierarchicalCampaignManager() {
   const [keywordPageSize, setKeywordPageSize] = useState(50);
 
   const queryClient = useQueryClient();
-  const days = dateRange.days || 7;
+  const days = useMemo(() => {
+    if (dateRange.startDate && dateRange.endDate) {
+      const diff = dateRange.endDate.getTime() - dateRange.startDate.getTime();
+      return Math.max(1, Math.round(diff / (24 * 60 * 60 * 1000)) + 1);
+    }
+    return dateRange.days ?? (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
+  }, [dateRange]);
+
+  const hasDateRange = Boolean(dateRange.startDate && dateRange.endDate);
 
   // Fetch trends for master chart
   const { data: trends } = useQuery({
-    queryKey: ['trends', days, dateRange.startDate, dateRange.endDate],
-    queryFn: () => {
-      if (dateRange.type === 'custom' && dateRange.startDate && dateRange.endDate) {
-        return fetchTrends(undefined, dateRange.startDate, dateRange.endDate);
-      }
-      return fetchTrends(days);
-    },
+    queryKey: ['trends', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), days],
+    queryFn: () =>
+      hasDateRange ? fetchTrends(undefined, dateRange.startDate!, dateRange.endDate!) : fetchTrends(days),
     enabled: activeTab === 'campaigns',
   });
 
   // Fetch event annotations for chart
   const { data: eventAnnotations = [] } = useQuery<EventAnnotation[]>({
-    queryKey: ['eventAnnotations', days, dateRange.startDate, dateRange.endDate],
-    queryFn: () => {
-      if (dateRange.type === 'custom' && dateRange.startDate && dateRange.endDate) {
-        return fetchEventAnnotations(undefined, dateRange.startDate, dateRange.endDate);
-      }
-      return fetchEventAnnotations(days);
-    },
+    queryKey: ['eventAnnotations', dateRange.type, dateRange.startDate?.toISOString(), dateRange.endDate?.toISOString(), days],
+    queryFn: () =>
+      hasDateRange ? fetchEventAnnotations(undefined, dateRange.startDate!, dateRange.endDate!) : fetchEventAnnotations(days),
     enabled: activeTab === 'campaigns',
   });
 
@@ -123,6 +176,39 @@ export default function HierarchicalCampaignManager() {
     // In a real implementation, you'd fetch trends for the previous period
     return undefined;
   }, [trends]);
+
+  // Chart data: full date range with all dates, filling 0 for missing so chart never disappears
+  const chartData = useMemo(() => {
+    const range = getChartDateRange(dateRange);
+    if (!range) return [];
+    const allDates = generateDateRange(range.start, range.end);
+    const trendByDate = new Map<string, { spend: number; sales: number; acos: number; roas: number; impressions: number; clicks: number; cpc: number; ctr: number; cvr: number }>();
+    (trends || []).forEach(t => {
+      const d = typeof t.date === 'string' ? t.date : (t.date as Date).toISOString?.()?.split('T')[0];
+      if (d) {
+        trendByDate.set(d, {
+          spend: typeof t.spend === 'number' ? t.spend : parseFloat(String(t.spend)) || 0,
+          sales: typeof t.sales === 'number' ? t.sales : parseFloat(String(t.sales)) || 0,
+          acos: typeof t.acos === 'number' ? t.acos : parseFloat(String(t.acos)) || 0,
+          roas: typeof t.roas === 'number' ? t.roas : parseFloat(String(t.roas)) || 0,
+          impressions: typeof t.impressions === 'number' ? t.impressions : parseInt(String(t.impressions)) || 0,
+          clicks: typeof t.clicks === 'number' ? t.clicks : parseInt(String(t.clicks)) || 0,
+          cpc: typeof t.cpc === 'number' ? t.cpc : parseFloat(String(t.cpc)) || 0,
+          ctr: typeof t.ctr === 'number' ? t.ctr : parseFloat(String(t.ctr)) || 0,
+          cvr: typeof t.cvr === 'number' ? t.cvr : parseFloat(String(t.cvr)) || 0,
+        });
+      }
+    });
+    const zeros = { spend: 0, sales: 0, acos: 0, roas: 0, impressions: 0, clicks: 0, cpc: 0, ctr: 0, cvr: 0 };
+    return allDates.map(date => {
+      const dateKey = date.toISOString().split('T')[0];
+      const point = trendByDate.get(dateKey) || zeros;
+      return {
+        date: dateKey,
+        ...point,
+      };
+    });
+  }, [dateRange, trends]);
 
   // Breadcrumbs - Show "All Campaigns > [Campaign Name] > Ad Groups" format
   const breadcrumbs = useMemo(() => {
@@ -143,24 +229,44 @@ export default function HierarchicalCampaignManager() {
   });
 
   const { data: campaignsResponse, isLoading: campaignsLoading } = useQuery({
-    queryKey: ['campaigns', days, portfolioFilter, campaignPage, campaignPageSize, urlCampaignId],
-    queryFn: () => fetchCampaigns(days, portfolioFilter, campaignPage, campaignPageSize, urlCampaignId ?? undefined),
+    queryKey: [
+      'campaigns',
+      days,
+      portfolioFilter,
+      campaignPage,
+      campaignPageSize,
+      urlCampaignId,
+      dateRange.startDate?.toISOString(),
+      dateRange.endDate?.toISOString(),
+      statusFilter,
+    ],
+    queryFn: () =>
+      fetchCampaigns(
+        days,
+        portfolioFilter,
+        campaignPage,
+        campaignPageSize,
+        urlCampaignId ?? undefined,
+        dateRange.startDate,
+        dateRange.endDate,
+        statusFilter
+      ),
     enabled: activeTab === 'campaigns' || activeTab === 'ad_groups' || activeTab === 'ads' || activeTab === 'keywords' || activeTab === 'targeting' || activeTab === 'search_terms' || activeTab === 'placements',
   });
   const campaigns = campaignsResponse?.data;
   const campaignPagination = campaignsResponse ? { page: campaignsResponse.page, pageSize: campaignsResponse.page_size, total: campaignsResponse.total, totalPages: campaignsResponse.total_pages } : undefined;
 
   const { data: adGroupsResponse, isLoading: adGroupsLoading } = useQuery({
-    queryKey: ['ad-groups', selectedCampaign?.id, days, adGroupPage, adGroupPageSize],
-    queryFn: () => fetchAdGroups(selectedCampaign?.id, days, adGroupPage, adGroupPageSize),
+    queryKey: ['ad-groups', selectedCampaign?.id, days, adGroupPage, adGroupPageSize, statusFilter],
+    queryFn: () => fetchAdGroups(selectedCampaign?.id, days, adGroupPage, adGroupPageSize, statusFilter),
     enabled: activeTab === 'ad_groups' && selectedCampaign !== null,
   });
   const adGroups = adGroupsResponse?.data;
   const adGroupPagination = adGroupsResponse ? { page: adGroupsResponse.page, pageSize: adGroupsResponse.page_size, total: adGroupsResponse.total, totalPages: adGroupsResponse.total_pages } : undefined;
 
   const { data: adsResponse, isLoading: adsLoading } = useQuery({
-    queryKey: ['ads', selectedCampaign?.id, selectedAdGroup?.id, days, adsPage, adsPageSize],
-    queryFn: () => fetchAds(selectedCampaign?.id, selectedAdGroup?.id, days, adsPage, adsPageSize),
+    queryKey: ['ads', selectedCampaign?.id, selectedAdGroup?.id, days, adsPage, adsPageSize, statusFilter],
+    queryFn: () => fetchAds(selectedCampaign?.id, selectedAdGroup?.id, days, adsPage, adsPageSize, statusFilter),
     enabled: activeTab === 'ads' && (selectedCampaign !== null || selectedAdGroup !== null),
   });
   const ads = adsResponse?.data;
@@ -213,6 +319,32 @@ export default function HierarchicalCampaignManager() {
       return ag.status?.toLowerCase() === statusFilter.toLowerCase();
     }) || [];
   }, [adGroups, statusFilter]);
+
+  // When navigating from search with ad_group_id: go to Ad Groups tab and show that ad group (once)
+  const hasAppliedUrlAdGroup = useRef(false);
+  if (urlAdGroupId == null) hasAppliedUrlAdGroup.current = false;
+  useEffect(() => {
+    if (urlAdGroupId == null || hasAppliedUrlAdGroup.current) return;
+    if (urlCampaignId != null && campaigns?.length) {
+      const campaign = campaigns.find(c => c.campaign_id === urlCampaignId);
+      if (campaign) {
+        hasAppliedUrlAdGroup.current = true;
+        setSelectedCampaign({ id: campaign.campaign_id, name: campaign.campaign_name });
+        setSelectedAdGroup({ id: urlAdGroupId, name: urlAdGroupName || 'Ad Group' });
+        setActiveTab('ad_groups');
+      }
+    }
+  }, [urlAdGroupId, urlCampaignId, urlAdGroupName, campaigns]);
+
+  // After ad groups load, update selected ad group name if we had a URL placeholder
+  useEffect(() => {
+    if (urlAdGroupId != null && selectedAdGroup?.id === urlAdGroupId && adGroups?.length && (urlAdGroupName === '' || selectedAdGroup.name === 'Ad Group')) {
+      const ag = adGroups.find(g => g.ad_group_id === urlAdGroupId);
+      if (ag && ag.ad_group_name !== selectedAdGroup.name) {
+        setSelectedAdGroup(prev => prev ? { ...prev, name: ag.ad_group_name } : null);
+      }
+    }
+  }, [urlAdGroupId, urlAdGroupName, selectedAdGroup, adGroups]);
 
   const filteredAds = useMemo(() => {
     return ads?.filter(ad => {
@@ -350,17 +482,14 @@ export default function HierarchicalCampaignManager() {
         const pageSize = 200;
         let totalPages = 1;
         while (page <= totalPages) {
-          const res = await fetchCampaigns(days, portfolioFilter, page, pageSize, undefined);
+          const res = await fetchCampaigns(days, portfolioFilter, page, pageSize, undefined, dateRange.startDate, dateRange.endDate, statusFilter);
           allCampaigns.push(...res.data);
           totalPages = res.total_pages;
           page++;
         }
-        const filtered = statusFilter === 'all'
-          ? allCampaigns
-          : allCampaigns.filter(c => c.status?.toLowerCase() === statusFilter.toLowerCase());
         payload = {
           filename: `campaigns-${today}.csv`,
-          rows: filtered.map(c => ({
+          rows: allCampaigns.map(c => ({
             campaign_name: c.campaign_name,
             status: c.status,
             spend: c.spend,
@@ -638,7 +767,7 @@ export default function HierarchicalCampaignManager() {
         loading={portfoliosLoading}
         emptyMessage="No portfolios found"
         statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
+        onStatusFilterChange={(v) => preserveScroll(() => setStatusFilter(v))}
       />
     );
   };
@@ -653,7 +782,7 @@ export default function HierarchicalCampaignManager() {
               <div className="flex items-center gap-2">
                 <select
                   value={portfolioFilter || ''}
-                  onChange={(e) => setPortfolioFilter(e.target.value ? parseInt(e.target.value) : undefined)}
+                  onChange={(e) => preserveScroll(() => setPortfolioFilter(e.target.value ? parseInt(e.target.value) : undefined))}
                   className="select text-sm"
                 >
                   <option value="">All Portfolios</option>
@@ -666,7 +795,6 @@ export default function HierarchicalCampaignManager() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <DateRangePicker value={dateRange} onChange={setDateRange} />
               <button
                 className="btn btn-sm btn-secondary"
                 title="Settings"
@@ -695,9 +823,9 @@ export default function HierarchicalCampaignManager() {
         </div>
         <SmartGrid
           data={filteredCampaigns}
-          statusFilter={statusFilter}
-          onStatusFilterChange={setStatusFilter}
-          statusFilterOptions={[
+statusFilter={statusFilter}
+        onStatusFilterChange={(v) => preserveScroll(() => setStatusFilter(v))}
+        statusFilterOptions={[
             { value: 'all', label: 'All Status' },
             { value: 'enabled', label: 'Enabled' },
             { value: 'paused', label: 'Paused' },
@@ -743,15 +871,17 @@ export default function HierarchicalCampaignManager() {
           {
             key: 'campaign_name',
             header: 'Campaign Name',
+            width: 320,
             sortable: true,
             render: (value: unknown, row: Campaign) => (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0">
                 <button
                   onClick={(e) => handleCampaignClick(row, e)}
-                  className="text-left hover:text-amazon-orange transition-colors flex-1"
+                  className="text-left hover:text-amazon-orange transition-colors flex-1 min-w-0"
                   type="button"
+                  title={row.campaign_name}
                 >
-                  <p className="font-medium text-gray-900 dark:text-white">{row.campaign_name}</p>
+                  <p className="font-medium text-gray-900 dark:text-white truncate" title={row.campaign_name}>{row.campaign_name}</p>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-xs text-gray-400">{row.campaign_type}</span>
                     {row.sb_ad_type && (
@@ -771,7 +901,7 @@ export default function HierarchicalCampaignManager() {
                     )}
                   </div>
                 </button>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
+                <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
               </div>
             ),
           },
@@ -888,7 +1018,7 @@ export default function HierarchicalCampaignManager() {
         emptyMessage="No campaigns found"
         pagination={campaignPagination}
         onPageChange={(p) => { setCampaignPage(p); setSelectedRows(new Set()); }}
-        onPageSizeChange={(s) => { setCampaignPageSize(s); setCampaignPage(1); setSelectedRows(new Set()); }}
+        onPageSizeChange={(s) => preserveScroll(() => { setCampaignPageSize(s); setCampaignPage(1); setSelectedRows(new Set()); })}
         />
       </div>
     );
@@ -899,21 +1029,23 @@ export default function HierarchicalCampaignManager() {
       <SmartGrid
         data={filteredAdGroups}
         statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
+        onStatusFilterChange={(v) => preserveScroll(() => setStatusFilter(v))}
         columns={[
           {
             key: 'ad_group_name',
             header: 'Ad Group Name',
+            width: 280,
             sortable: true,
             render: (value: unknown, row: any) => (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0">
                 <button
                   onClick={() => handleAdGroupClick(row)}
-                  className="text-left hover:text-amazon-orange transition-colors"
+                  className="text-left hover:text-amazon-orange transition-colors flex-1 min-w-0"
+                  title={row.ad_group_name}
                 >
-                  <p className="font-medium text-gray-900 dark:text-white">{row.ad_group_name}</p>
+                  <p className="font-medium text-gray-900 dark:text-white truncate" title={row.ad_group_name}>{row.ad_group_name}</p>
                 </button>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
+                <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
               </div>
             ),
           },
@@ -972,7 +1104,7 @@ export default function HierarchicalCampaignManager() {
         emptyMessage="No ad groups found"
         pagination={adGroupPagination}
         onPageChange={setAdGroupPage}
-        onPageSizeChange={(s) => { setAdGroupPageSize(s); setAdGroupPage(1); }}
+        onPageSizeChange={(s) => preserveScroll(() => { setAdGroupPageSize(s); setAdGroupPage(1); })}
       />
     );
   };
@@ -982,7 +1114,7 @@ export default function HierarchicalCampaignManager() {
       <SmartGrid
         data={filteredAds}
         statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
+        onStatusFilterChange={(v) => preserveScroll(() => setStatusFilter(v))}
         columns={[
           {
             key: 'asin',
@@ -1083,7 +1215,7 @@ export default function HierarchicalCampaignManager() {
         emptyMessage="No ads found"
         pagination={adsPagination}
         onPageChange={setAdsPage}
-        onPageSizeChange={(s) => { setAdsPageSize(s); setAdsPage(1); }}
+        onPageSizeChange={(s) => preserveScroll(() => { setAdsPageSize(s); setAdsPage(1); })}
       />
     );
   };
@@ -1093,14 +1225,15 @@ export default function HierarchicalCampaignManager() {
       <SmartGrid
         data={filteredKeywords}
         statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
+        onStatusFilterChange={(v) => preserveScroll(() => setStatusFilter(v))}
         columns={[
           {
             key: 'keyword_text',
             header: 'Keyword',
+            width: 260,
             sortable: true,
             render: (value: unknown) => (
-              <span className="font-medium text-gray-900 dark:text-white">{value as string}</span>
+              <span className="font-medium text-gray-900 dark:text-white truncate block min-w-0" title={value as string}>{value as string}</span>
             ),
           },
           {
@@ -1165,7 +1298,7 @@ export default function HierarchicalCampaignManager() {
         emptyMessage="No keywords found"
         pagination={keywordPagination}
         onPageChange={setKeywordPage}
-        onPageSizeChange={(s) => { setKeywordPageSize(s); setKeywordPage(1); }}
+        onPageSizeChange={(s) => preserveScroll(() => { setKeywordPageSize(s); setKeywordPage(1); })}
       />
     );
   };
@@ -1178,10 +1311,11 @@ export default function HierarchicalCampaignManager() {
           {
             key: 'target_value',
             header: 'Target',
+            width: 260,
             sortable: true,
             render: (value: unknown, row: any) => (
-              <div>
-                <p className="font-medium text-gray-900 dark:text-white">{value as string}</p>
+              <div className="min-w-0">
+                <p className="font-medium text-gray-900 dark:text-white truncate" title={value as string}>{value as string}</p>
                 <p className="text-xs text-gray-400">{row.target_type}</p>
               </div>
             ),
@@ -1272,9 +1406,10 @@ export default function HierarchicalCampaignManager() {
           {
             key: 'search_term',
             header: 'Search Term',
+            width: 280,
             sortable: true,
             render: (value: unknown) => (
-              <span className="font-medium text-gray-900 dark:text-white">{value as string}</span>
+              <span className="font-medium text-gray-900 dark:text-white truncate block min-w-0" title={value as string}>{value as string}</span>
             ),
           },
           {
@@ -1435,7 +1570,7 @@ export default function HierarchicalCampaignManager() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <DateRangePicker value={dateRange} onChange={setDateRange} />
+          <DateRangePicker value={dateRange} onChange={(range) => preserveScroll(() => setDateRange(range))} />
           <button
             onClick={() => queryClient.invalidateQueries()}
             className="btn btn-secondary"
@@ -1477,21 +1612,10 @@ export default function HierarchicalCampaignManager() {
         />
       )}
 
-      {/* Master Performance Chart (shown for campaigns tab) */}
-      {activeTab === 'campaigns' && trends && trends.length > 0 && (
+      {/* Master Performance Chart (shown for campaigns tab; all dates in range, 0 when no data) */}
+      {activeTab === 'campaigns' && chartData.length > 0 && (
         <MasterPerformanceChart
-          data={trends.map(t => ({
-            date: t.date,
-            spend: typeof t.spend === 'number' ? t.spend : parseFloat(String(t.spend)) || 0,
-            sales: typeof t.sales === 'number' ? t.sales : parseFloat(String(t.sales)) || 0,
-            acos: typeof t.acos === 'number' ? t.acos : parseFloat(String(t.acos)) || 0,
-            roas: typeof t.roas === 'number' ? t.roas : parseFloat(String(t.roas)) || 0,
-            impressions: typeof t.impressions === 'number' ? t.impressions : parseInt(String(t.impressions)) || 0,
-            clicks: typeof t.clicks === 'number' ? t.clicks : parseInt(String(t.clicks)) || 0,
-            cpc: typeof t.cpc === 'number' ? t.cpc : parseFloat(String(t.cpc)) || 0,
-            ctr: typeof t.ctr === 'number' ? t.ctr : parseFloat(String(t.ctr)) || 0,
-            cvr: typeof t.cvr === 'number' ? t.cvr : parseFloat(String(t.cvr)) || 0,
-          }))}
+          data={chartData}
           previousPeriodData={previousPeriodData}
           eventAnnotations={eventAnnotations}
           height={400}
