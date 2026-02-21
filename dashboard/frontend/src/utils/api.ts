@@ -195,27 +195,19 @@ export interface NegativeCandidate extends Record<string, unknown> {
 export interface ProductTarget extends Record<string, unknown> {
   targeting_id: number;
   targeting_value: string;
-  targeting_type: 'asin' | 'category' | 'brand' | 'keyword';
+  targeting_type: string;
   campaign_id: number;
-  campaign_name: string;
+  campaign_name: string | null;
   ad_group_id: number;
-  ad_group_name: string;
-  bid: number;
-  status: string;
-  spend: number;
-  sales: number;
+  ad_group_name: string | null;
+  bid: number | null;
+  state: string | null;
+  impressions: number | null;
+  clicks: number | null;
+  spend: number | null;
+  sales: number | null;
   acos: number | null;
   roas: number | null;
-  orders: number;
-  impressions: number;
-  clicks: number;
-  ctr: number;
-  cvr: number;
-  ai_suggested_bid: number | null;
-  confidence_score: number | null;
-  reason: string | null;
-  is_locked: boolean;
-  lock_reason: string | null;
 }
 
 export interface ChangeLogEntry extends Record<string, unknown> {
@@ -687,7 +679,8 @@ export const fetchProductTargeting = async (campaignId?: number, adGroupId?: num
   if (campaignId) params.append('campaign_id', campaignId.toString());
   if (adGroupId) params.append('ad_group_id', adGroupId.toString());
   const response = await api.get(`/api/product-targeting?${params.toString()}`);
-  return response.data;
+  const body = response.data;
+  return Array.isArray(body) ? body : (body.data ?? []);
 };
 
 // Search Terms
@@ -966,6 +959,7 @@ export const fetchProductTargets = async (params: {
   campaign_id?: number;
   ad_group_id?: number;
   targeting_type?: 'asin' | 'category' | 'brand';
+  state?: string;
   days?: number;
   limit?: number;
   page?: number;
@@ -975,6 +969,7 @@ export const fetchProductTargets = async (params: {
   if (params.campaign_id) queryParams.append('campaign_id', params.campaign_id.toString());
   if (params.ad_group_id) queryParams.append('ad_group_id', params.ad_group_id.toString());
   if (params.targeting_type) queryParams.append('targeting_type', params.targeting_type);
+  if (params.state) queryParams.append('state', params.state);
   if (params.days) queryParams.append('days', params.days.toString());
   if (params.limit) queryParams.append('limit', params.limit.toString());
   queryParams.append('page', (params.page ?? 1).toString());

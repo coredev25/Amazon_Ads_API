@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { 
   Check, X, Edit2, Save, Columns, Filter, 
   Play, Pause, Archive, TrendingUp, TrendingDown, DollarSign,
@@ -69,6 +69,8 @@ interface SmartGridProps<T extends Record<string, unknown>> {
   };
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
+  /** When true, table has no horizontal scroll (no scrollbar, content can wrap/overflow naturally) */
+  disableTableScroll?: boolean;
 }
 
 export default function SmartGrid<T extends Record<string, unknown>>({
@@ -101,6 +103,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   pagination,
   onPageChange,
   onPageSizeChange,
+  disableTableScroll = false,
 }: SmartGridProps<T>) {
   const gridToast = useToast();
   const [editingCell, setEditingCell] = useState<{ rowId: string | number; column: string } | null>(null);
@@ -181,6 +184,40 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   const inputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
+  const tableScrollContainerRef = useRef<HTMLDivElement>(null);
+  const topScrollBarRef = useRef<HTMLDivElement>(null);
+  const topScrollSpacerRef = useRef<HTMLDivElement>(null);
+  const isSyncingScroll = useRef(false);
+
+  useLayoutEffect(() => {
+    const container = tableScrollContainerRef.current;
+    const spacer = topScrollSpacerRef.current;
+    if (container && spacer) {
+      spacer.style.width = `${container.scrollWidth}px`;
+    }
+  });
+
+  const syncScrollFromTable = () => {
+    if (isSyncingScroll.current) return;
+    const container = tableScrollContainerRef.current;
+    const top = topScrollBarRef.current;
+    if (container && top) {
+      isSyncingScroll.current = true;
+      top.scrollLeft = container.scrollLeft;
+      requestAnimationFrame(() => { isSyncingScroll.current = false; });
+    }
+  };
+
+  const syncScrollFromTop = () => {
+    if (isSyncingScroll.current) return;
+    const container = tableScrollContainerRef.current;
+    const top = topScrollBarRef.current;
+    if (container && top) {
+      isSyncingScroll.current = true;
+      container.scrollLeft = top.scrollLeft;
+      requestAnimationFrame(() => { isSyncingScroll.current = false; });
+    }
+  };
 
   // Generate a unique key for localStorage based on columns
   const gridLayoutKey = `smartgrid_layout_${columns.map(c => String(c.key)).join('_')}`;
@@ -745,8 +782,23 @@ export default function SmartGrid<T extends Record<string, unknown>>({
 
       {/* Table */}
       <div className="card overflow-hidden">
-        <div className="overflow-x-auto pr-4 md:pr-6">
-          <table ref={tableRef} className="w-full min-w-full table-fixed border-collapse">
+        {!disableTableScroll && (
+          <div
+            ref={topScrollBarRef}
+            onScroll={syncScrollFromTop}
+            className="overflow-x-auto overflow-y-hidden border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
+            style={{ minHeight: 0 }}
+            aria-hidden
+          >
+            <div ref={topScrollSpacerRef} style={{ height: 1 }} />
+          </div>
+        )}
+        <div
+          ref={tableScrollContainerRef}
+          onScroll={disableTableScroll ? undefined : syncScrollFromTable}
+          className={disableTableScroll ? '' : 'overflow-x-auto pr-4 md:pr-6'}
+        >
+          <table ref={tableRef} className={cn('w-full border-collapse', !disableTableScroll && 'min-w-full table-fixed')}>
             <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
               <tr>
                 {enableSelection && (

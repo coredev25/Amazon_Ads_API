@@ -555,20 +555,21 @@ class AdData(BaseModel):
 
 
 class ProductTargetData(BaseModel):
-    target_id: int
-    target_type: str
-    target_value: str
+    targeting_id: int
+    targeting_value: str
+    targeting_type: str
     campaign_id: int
+    campaign_name: Optional[str] = None
     ad_group_id: int
-    bid: float
-    status: str
-    spend: float
-    sales: float
+    ad_group_name: Optional[str] = None
+    bid: Optional[float] = None
+    state: Optional[str] = None
+    impressions: Optional[int] = None
+    clicks: Optional[int] = None
+    spend: Optional[float] = None
+    sales: Optional[float] = None
     acos: Optional[float] = None
     roas: Optional[float] = None
-    orders: int
-    impressions: int
-    clicks: int
 
 
 class SearchTermData(BaseModel):
@@ -2266,114 +2267,114 @@ async def unlock_keyword_bid(keyword_id: int, current_user: UserResponse = Depen
 async def get_product_targeting(
     campaign_id: Optional[int] = None,
     ad_group_id: Optional[int] = None,
-    targeting_type: Optional[str] = None,  # asin, category, brand
+    targeting_type: Optional[str] = None,
+    state: Optional[str] = None,
     days: int = Query(7, ge=1, le=90),
-    limit: int = Query(100, ge=1, le=1000)
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
 ):
-    """Get product targeting (ASIN, Category, Brand) performance data
-    
-    DISTINCT from keyword targeting - focuses on product-level targeting:
-    - ASIN Targeting: Target specific product ASINs
-    - Category Targeting: Target product categories
-    - Brand Targeting: Target specific brands (competitors or complementary)
-    """
+    """Get product targeting data from DB with performance from keyword_performance."""
     try:
-        # This is a placeholder that returns mock data
-        # In production, this would query your product targeting data from the database
-        logger.info(f"Fetching product targets (type={targeting_type}, days={days})")
-        
-        # Mock data for demonstration
-        mock_targets = [
-            {
-                'targeting_id': 1,
-                'targeting_value': 'B0123456789',
-                'targeting_type': 'asin',
-                'campaign_id': 1,
-                'campaign_name': 'Test Campaign',
-                'ad_group_id': 1,
-                'ad_group_name': 'Test Ad Group',
-                'bid': 0.75,
-                'status': 'enabled',
-                'spend': 1500.00,
-                'sales': 3000.00,
-                'acos': 0.50,
-                'roas': 2.00,
-                'orders': 15,
-                'impressions': 5000,
-                'clicks': 250,
-                'ctr': 5.0,
-                'cvr': 6.0,
-                'ai_suggested_bid': 0.85,
-                'confidence_score': 0.92,
-                'reason': 'High ACOS - recommend bid increase',
-                'is_locked': False,
-                'lock_reason': None,
-            },
-            {
-                'targeting_id': 2,
-                'targeting_value': 'Small Electronics',
-                'targeting_type': 'category',
-                'campaign_id': 1,
-                'campaign_name': 'Test Campaign',
-                'ad_group_id': 2,
-                'ad_group_name': 'Electronics Ad Group',
-                'bid': 0.50,
-                'status': 'enabled',
-                'spend': 800.00,
-                'sales': 2000.00,
-                'acos': 0.40,
-                'roas': 2.50,
-                'orders': 10,
-                'impressions': 3000,
-                'clicks': 200,
-                'ctr': 6.67,
-                'cvr': 5.0,
-                'ai_suggested_bid': None,
-                'confidence_score': None,
-                'reason': None,
-                'is_locked': False,
-                'lock_reason': None,
-            },
-            {
-                'targeting_id': 3,
-                'targeting_value': 'CompetitorBrand',
-                'targeting_type': 'brand',
-                'campaign_id': 1,
-                'campaign_name': 'Test Campaign',
-                'ad_group_id': 3,
-                'ad_group_name': 'Competitive Ad Group',
-                'bid': 1.25,
-                'status': 'enabled',
-                'spend': 2500.00,
-                'sales': 5500.00,
-                'acos': 0.45,
-                'roas': 2.20,
-                'orders': 22,
-                'impressions': 8000,
-                'clicks': 400,
-                'ctr': 5.0,
-                'cvr': 5.5,
-                'ai_suggested_bid': None,
-                'confidence_score': None,
-                'reason': None,
-                'is_locked': False,
-                'lock_reason': None,
-            },
-        ]
-        
-        # Filter by type if specified
-        if targeting_type:
-            mock_targets = [t for t in mock_targets if t['targeting_type'] == targeting_type]
-        
-        # Filter by campaign if specified
-        if campaign_id:
-            mock_targets = [t for t in mock_targets if t['campaign_id'] == campaign_id]
-        
-        # Filter by ad group if specified
-        if ad_group_id:
-            mock_targets = [t for t in mock_targets if t['ad_group_id'] == ad_group_id]
-        
-        return mock_targets[:limit]
+        with db_connector.get_connection() as conn:
+            import psycopg2.extras
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                end_date = datetime.now().date()
+                start_date = end_date - timedelta(days=days)
+
+                where_clauses = ["1=1"]
+                params: list = []
+
+                if campaign_id:
+                    where_clauses.append("pt.campaign_id = %s")
+                    params.append(campaign_id)
+                if ad_group_id:
+                    where_clauses.append("pt.ad_group_id = %s")
+                    params.append(ad_group_id)
+                if targeting_type:
+                    where_clauses.append("LOWER(pt.target_type) = LOWER(%s)")
+                    params.append(targeting_type)
+                if state:
+                    where_clauses.append("LOWER(pt.state) = LOWER(%s)")
+                    params.append(state)
+
+                where_sql = " AND ".join(where_clauses)
+
+                count_sql = f"SELECT COUNT(*) AS cnt FROM product_targets pt WHERE {where_sql}"
+                cursor.execute(count_sql, params)
+                total = cursor.fetchone()["cnt"]
+                total_pages = max(1, (total + page_size - 1) // page_size)
+
+                offset = (page - 1) * page_size
+                params_main = [start_date, end_date] + list(params) + [page_size, offset]
+
+                query = f"""
+                    SELECT
+                        pt.target_id   AS targeting_id,
+                        pt.target_value AS targeting_value,
+                        LOWER(pt.target_type) AS targeting_type,
+                        pt.campaign_id,
+                        c.campaign_name,
+                        pt.ad_group_id,
+                        ag.ad_group_name,
+                        pt.bid,
+                        pt.state,
+                        perf.impressions,
+                        perf.clicks,
+                        perf.spend,
+                        perf.sales
+                    FROM product_targets pt
+                    LEFT JOIN campaigns c  ON pt.campaign_id  = c.campaign_id
+                    LEFT JOIN ad_groups ag ON pt.ad_group_id  = ag.ad_group_id
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            COALESCE(SUM(cp.impressions), 0)          AS impressions,
+                            COALESCE(SUM(cp.clicks), 0)               AS clicks,
+                            COALESCE(SUM(cp.cost), 0)                 AS spend,
+                            COALESCE(SUM(cp.attributed_sales_7d), 0)  AS sales
+                        FROM campaign_performance cp
+                        WHERE cp.campaign_id = pt.campaign_id
+                          AND cp.report_date >= %s
+                          AND cp.report_date <= %s
+                    ) perf ON TRUE
+                    WHERE {where_sql}
+                    ORDER BY pt.target_id
+                    LIMIT %s OFFSET %s
+                """
+
+                cursor.execute(query, params_main)
+                rows = cursor.fetchall()
+
+                data = []
+                for r in rows:
+                    spend = float(r["spend"] or 0)
+                    sales = float(r["sales"] or 0)
+                    acos = round(spend / sales * 100, 2) if sales > 0 else None
+                    roas = round(sales / spend, 2) if spend > 0 else None
+                    data.append({
+                        "targeting_id": r["targeting_id"],
+                        "targeting_value": r["targeting_value"] or "",
+                        "targeting_type": r["targeting_type"] or "",
+                        "campaign_id": r["campaign_id"],
+                        "campaign_name": r["campaign_name"] or "",
+                        "ad_group_id": r["ad_group_id"],
+                        "ad_group_name": r["ad_group_name"] or "",
+                        "bid": float(r["bid"]) if r["bid"] is not None else None,
+                        "state": (r["state"] or "").lower() or None,
+                        "impressions": int(r["impressions"] or 0),
+                        "clicks": int(r["clicks"] or 0),
+                        "spend": spend,
+                        "sales": sales,
+                        "acos": acos,
+                        "roas": roas,
+                    })
+
+                return {
+                    "data": data,
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_pages": total_pages,
+                }
     except Exception as e:
         logger.error(f"Error fetching product targeting: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4077,91 +4078,6 @@ async def get_ad_groups(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/targeting")
-async def get_product_targeting(
-    campaign_id: Optional[int] = None,
-    ad_group_id: Optional[int] = None,
-    days: int = Query(7, ge=1, le=90),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=10, le=200),
-):
-    """Get product targeting data (paginated)"""
-    try:
-        with db_connector.get_connection() as conn:
-            import psycopg2.extras
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-                query = """
-                    SELECT pt.target_id, pt.target_type, pt.target_value, 
-                           pt.campaign_id, pt.ad_group_id, pt.bid, pt.state as status
-                    FROM product_targets pt
-                    WHERE 1=1
-                """
-                params = []
-                
-                if campaign_id:
-                    query += " AND pt.campaign_id = %s"
-                    params.append(campaign_id)
-                
-                if ad_group_id:
-                    query += " AND pt.ad_group_id = %s"
-                    params.append(ad_group_id)
-                
-                cursor.execute(query, params)
-                targets = cursor.fetchall()
-                
-                result = []
-                end_date = datetime.now().date()
-                start_date = end_date - timedelta(days=days)
-                
-                for target in targets:
-                    target_id = target['target_id']
-                    
-                    # Get performance data
-                    cursor.execute("""
-                        SELECT 
-                            SUM(impressions) as total_impressions,
-                            SUM(clicks) as total_clicks,
-                            SUM(cost) as total_spend,
-                            SUM(attributed_sales_7d) as total_sales,
-                            SUM(attributed_conversions_7d) as total_orders
-                        FROM product_target_performance
-                        WHERE target_id = %s
-                        AND report_date >= %s
-                        AND report_date <= %s
-                    """, (target_id, start_date, end_date))
-                    
-                    perf = cursor.fetchone()
-                    spend = float(perf['total_spend'] or 0)
-                    sales = float(perf['total_sales'] or 0)
-                    impressions = int(perf['total_impressions'] or 0)
-                    clicks = int(perf['total_clicks'] or 0)
-                    orders = int(perf['total_orders'] or 0)
-                    
-                    result.append(ProductTargetData(
-                        target_id=target_id,
-                        target_type=target['target_type'],
-                        target_value=target['target_value'],
-                        campaign_id=target['campaign_id'],
-                        ad_group_id=target['ad_group_id'],
-                        bid=float(target['bid'] or 0),
-                        status=target['status'],
-                        spend=spend,
-                        sales=sales,
-                        acos=round(spend / sales * 100, 2) if sales > 0 else None,
-                        roas=round(sales / spend, 2) if spend > 0 else None,
-                        orders=orders,
-                        impressions=impressions,
-                        clicks=clicks
-                    ))
-                
-                total = len(result)
-                total_pages = max(1, (total + page_size - 1) // page_size)
-                start_idx = (page - 1) * page_size
-                end_idx = start_idx + page_size
-                return {"data": result[start_idx:end_idx], "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
-    except Exception as e:
-        logger.error(f"Error fetching product targeting: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/ads")

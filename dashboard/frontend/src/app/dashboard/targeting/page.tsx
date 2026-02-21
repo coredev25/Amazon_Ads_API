@@ -12,7 +12,6 @@ import {
   Tag,
 } from 'lucide-react';
 import SmartGrid, { type Column } from '@/components/SmartGrid';
-import DateRangePicker, { type DateRange } from '@/components/DateRangePicker';
 import { fetchProductTargets, type ProductTarget } from '@/utils/api';
 import {
   formatCurrency,
@@ -28,11 +27,9 @@ interface ProductTargetingExtended extends ProductTarget {
   profitability?: 'profitable' | 'breakeven' | 'unprofitable';
 }
 
+const DAYS = 7;
+
 export default function ProductTargetingPage() {
-  const [dateRange, setDateRange] = useState<DateRange>({
-    type: 'last_7_days',
-    days: 7,
-  });
   const [targetingTypeFilter, setTargetingTypeFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
   const [selectedRows, setSelectedRows] = useState<Set<string | number>>(new Set());
@@ -41,15 +38,13 @@ export default function ProductTargetingPage() {
   
   const queryClient = useQueryClient();
 
-  // Calculate days from dateRange
-  const days = dateRange.days || (dateRange.type === 'last_7_days' ? 7 : dateRange.type === 'last_14_days' ? 14 : dateRange.type === 'last_30_days' ? 30 : 7);
-
   const { data: targetingResponse, isLoading, refetch } = useQuery({
-    queryKey: ['product-targets', dateRange.type, targetingTypeFilter, days, page, pageSize],
+    queryKey: ['product-targets', targetingTypeFilter, stateFilter, page, pageSize],
     queryFn: async () => {
       const res = await fetchProductTargets({
-        days,
+        days: DAYS,
         targeting_type: targetingTypeFilter !== 'all' ? targetingTypeFilter as 'asin' | 'category' | 'brand' : undefined,
+        state: stateFilter !== 'all' ? stateFilter : undefined,
         page,
         page_size: pageSize,
       });
@@ -65,6 +60,12 @@ export default function ProductTargetingPage() {
   });
 
   const targets = targetingResponse?.data ?? [];
+
+  const emptyOrDash = (v: unknown): string => {
+    if (v === null || v === undefined) return '-';
+    const s = String(v).trim();
+    return s === '' ? '-' : s;
+  };
 
   // Targeting type to UI badge mapping
   const getTargetingTypeBadge = (type: string): string => {
@@ -89,19 +90,20 @@ export default function ProductTargetingPage() {
     {
       key: 'targeting_id',
       header: 'Target ID',
-      width: 100,
+      width: 160,
       sortable: true,
+      render: (value: unknown) => <span className="font-mono whitespace-nowrap">{emptyOrDash(value)}</span>,
     },
     {
       key: 'targeting_value',
       header: 'Target Value',
-      width: 180,
+      width: 200,
       sortable: true,
       render: (value: unknown, row: ProductTargetingExtended) => (
-        <div className="flex items-center gap-2">
-          <span className="font-medium">{String(value)}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-medium truncate" title={emptyOrDash(value)}>{emptyOrDash(value)}</span>
           <span className={cn(
-            'px-2 py-1 rounded text-xs font-semibold',
+            'px-2 py-1 rounded text-xs font-semibold flex-shrink-0',
             row.targeting_type === 'asin' && 'bg-blue-500/20 text-blue-700 dark:text-blue-300',
             row.targeting_type === 'category' && 'bg-purple-500/20 text-purple-700 dark:text-purple-300',
             row.targeting_type === 'brand' && 'bg-green-500/20 text-green-700 dark:text-green-300',
@@ -114,39 +116,43 @@ export default function ProductTargetingPage() {
     {
       key: 'campaign_name',
       header: 'Campaign',
-      width: 150,
+      width: 200,
       sortable: true,
+      render: (value: unknown) => <span className="truncate block" title={emptyOrDash(value)}>{emptyOrDash(value)}</span>,
     },
     {
       key: 'ad_group_name',
       header: 'Ad Group',
-      width: 150,
+      width: 180,
       sortable: true,
+      render: (value: unknown) => <span className="truncate block" title={emptyOrDash(value)}>{emptyOrDash(value)}</span>,
     },
     {
       key: 'bid',
       header: 'Bid',
       width: 100,
-      editable: true,
-      editType: 'currency',
       sortable: true,
-      render: (value: unknown) => <span className="font-mono">{formatCurrency(Number(value))}</span>,
+      render: (value: unknown) => (
+        <span className="font-mono">{value != null && value !== '' ? formatCurrency(Number(value)) : '-'}</span>
+      ),
     },
     {
-      key: 'status',
-      header: 'Status',
+      key: 'state',
+      header: 'State',
       width: 100,
       sortable: true,
       render: (value: unknown) => {
-        const status = String(value);
+        const state = emptyOrDash(value);
+        if (state === '-') return <span className="text-gray-500">-</span>;
+        const s = state.toLowerCase();
         return (
           <span className={cn(
             'px-2 py-1 rounded-full text-xs font-semibold',
-            status === 'enabled' && 'bg-green-500/20 text-green-700 dark:text-green-300',
-            status === 'paused' && 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-300',
-            status === 'archived' && 'bg-gray-500/20 text-gray-700 dark:text-gray-300',
+            s === 'enabled' && 'bg-green-500/20 text-green-700 dark:text-green-300',
+            s === 'paused' && 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-300',
+            s === 'archived' && 'bg-gray-500/20 text-gray-700 dark:text-gray-300',
           )}>
-            {status.charAt(0).toUpperCase() + status.slice(1)}
+            {state.charAt(0).toUpperCase() + state.slice(1)}
           </span>
         );
       },
@@ -156,46 +162,53 @@ export default function ProductTargetingPage() {
       header: 'Impressions',
       width: 120,
       sortable: true,
-      render: (value: unknown) => formatNumber(Number(value)),
+      render: (value: unknown) => <span>{value != null && value !== '' ? formatNumber(Number(value)) : '-'}</span>,
     },
     {
       key: 'clicks',
       header: 'Clicks',
       width: 100,
       sortable: true,
-      render: (value: unknown) => formatNumber(Number(value)),
+      render: (value: unknown) => <span>{value != null && value !== '' ? formatNumber(Number(value)) : '-'}</span>,
     },
     {
       key: 'spend',
       header: 'Spend',
       width: 120,
       sortable: true,
-      render: (value: unknown) => <span className="font-mono font-semibold">{formatCurrency(Number(value))}</span>,
+      render: (value: unknown) => (
+        <span className="font-mono font-semibold">{value != null && value !== '' ? formatCurrency(Number(value)) : '-'}</span>
+      ),
     },
     {
       key: 'sales',
       header: 'Sales',
       width: 120,
       sortable: true,
-      render: (value: unknown) => <span className="font-mono font-semibold">{formatCurrency(Number(value))}</span>,
+      render: (value: unknown) => (
+        <span className="font-mono font-semibold">{value != null && value !== '' ? formatCurrency(Number(value)) : '-'}</span>
+      ),
     },
     {
       key: 'acos',
       header: 'ACoS',
-      width: 100,
+      width: 110,
       sortable: true,
       render: (value: unknown, row: ProductTargetingExtended) => {
+        if (value == null || value === '' || (typeof value === 'number' && isNaN(value))) return <span>-</span>;
         const numValue = Number(value);
-        const color = numValue < 0.09 ? 'text-green-600' : numValue > 0.15 ? 'text-red-600' : 'text-yellow-600';
+        const color = numValue < 9 ? 'text-green-600' : numValue > 15 ? 'text-red-600' : 'text-yellow-600';
         return <span className={cn('font-mono font-semibold', color)}>{formatAcos(numValue)}</span>;
       },
     },
     {
       key: 'roas',
       header: 'RoAS',
-      width: 100,
+      width: 110,
       sortable: true,
-      render: (value: unknown) => <span className="font-mono">{formatRoas(Number(value))}</span>,
+      render: (value: unknown) => (
+        <span className="font-mono">{value != null && value !== '' && !isNaN(Number(value)) ? formatRoas(Number(value)) : '-'}</span>
+      ),
     },
   ];
 
@@ -257,11 +270,7 @@ export default function ProductTargetingPage() {
 
       {/* Filters */}
       <div className="card p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="label">Date Range</label>
-            <DateRangePicker value={dateRange} onChange={setDateRange} className="w-full"/>
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="label">Targeting Type</label>
             <select
@@ -276,13 +285,13 @@ export default function ProductTargetingPage() {
             </select>
           </div>
           <div>
-            <label className="label">Status</label>
+            <label className="label">State</label>
             <select
               value={stateFilter}
               onChange={(e) => setStateFilter(e.target.value)}
               className="input"
             >
-              <option value="all">All Status</option>
+              <option value="all">All States</option>
               <option value="enabled">Enabled</option>
               <option value="paused">Paused</option>
               <option value="archived">Archived</option>
@@ -333,7 +342,7 @@ export default function ProductTargetingPage() {
             // TODO: Implement bulk actions
           }}
           statusFilterOptions={[
-            { value: 'all', label: 'All Status' },
+            { value: 'all', label: 'All States' },
             { value: 'enabled', label: 'Enabled' },
             { value: 'paused', label: 'Paused' },
             { value: 'archived', label: 'Archived' },

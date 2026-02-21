@@ -1313,12 +1313,16 @@ statusFilter={statusFilter}
             header: 'Target',
             width: 260,
             sortable: true,
-            render: (value: unknown, row: any) => (
-              <div className="min-w-0">
-                <p className="font-medium text-gray-900 dark:text-white truncate" title={value as string}>{value as string}</p>
-                <p className="text-xs text-gray-400">{row.target_type}</p>
-              </div>
-            ),
+            render: (value: unknown, row: any) => {
+              const raw = value != null && String(value).trim() !== '' ? String(value) : '';
+              const v = raw || row.campaign_name || '-';
+              return (
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-900 dark:text-white truncate" title={v}>{v}</p>
+                  <p className="text-xs text-gray-400">{row.target_type || '-'}</p>
+                </div>
+              );
+            },
           },
           {
             key: 'bid',
