@@ -118,6 +118,8 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   const [columnFilters, setColumnFilters] = useState<Record<string, { type: string; value: any; operator?: string }>>({});
   const [showFilterMenu, setShowFilterMenu] = useState<string | null>(null);
   const [showBulkActionMenu, setShowBulkActionMenu] = useState(false);
+  const [pageInputValue, setPageInputValue] = useState<string>(String(pagination?.page ?? 1));
+  const pageInputFocused = useRef(false);
   const [bulkActionParams, setBulkActionParams] = useState<any>({});
   const [bulkActionConfirmation, setBulkActionConfirmation] = useState<{ 
     action: string; 
@@ -139,6 +141,12 @@ export default function SmartGrid<T extends Record<string, unknown>>({
   const promptInputRef = useRef<HTMLInputElement>(null);
   const statusFilterScrollRef = useRef<number | null>(null);
   const pageSizeScrollRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!pageInputFocused.current && pagination) {
+      setPageInputValue(String(pagination.page));
+    }
+  }, [pagination?.page]);
 
   const getMainScrollTop = () => {
     const main = document.querySelector('main');
@@ -782,17 +790,6 @@ export default function SmartGrid<T extends Record<string, unknown>>({
 
       {/* Table */}
       <div className="card overflow-hidden">
-        {!disableTableScroll && (
-          <div
-            ref={topScrollBarRef}
-            onScroll={syncScrollFromTop}
-            className="overflow-x-auto overflow-y-hidden border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50"
-            style={{ minHeight: 0 }}
-            aria-hidden
-          >
-            <div ref={topScrollSpacerRef} style={{ height: 1 }} />
-          </div>
-        )}
         <div
           ref={tableScrollContainerRef}
           onScroll={disableTableScroll ? undefined : syncScrollFromTable}
@@ -1254,36 +1251,44 @@ export default function SmartGrid<T extends Record<string, unknown>>({
               <ChevronLeft className="w-4 h-4" />
             </button>
 
-            {/* Page number buttons */}
-            {(() => {
-              const pages: number[] = [];
-              const current = pagination.page;
-              const total = pagination.totalPages;
-              const maxVisible = 5;
-              
-              let start = Math.max(1, current - Math.floor(maxVisible / 2));
-              let end = Math.min(total, start + maxVisible - 1);
-              if (end - start + 1 < maxVisible) {
-                start = Math.max(1, end - maxVisible + 1);
-              }
-              
-              for (let i = start; i <= end; i++) pages.push(i);
-              
-              return pages.map(p => (
-                <button
-                  key={p}
-                  onClick={() => onPageChange?.(p)}
-                  className={cn(
-                    'min-w-[32px] h-8 px-2 rounded-lg text-sm font-medium transition-all',
-                    p === current
-                      ? 'bg-amazon-orange text-black shadow-sm'
-                      : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                  )}
-                >
-                  {p}
-                </button>
-              ));
-            })()}
+            {/* Editable page number */}
+            <span className="text-sm text-gray-600 dark:text-gray-400 mx-1">Page</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={pageInputValue}
+              onFocus={(e) => {
+                pageInputFocused.current = true;
+                e.target.select();
+              }}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^0-9]/g, '');
+                setPageInputValue(raw);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const v = parseInt(pageInputValue, 10);
+                  if (!isNaN(v) && v >= 1 && v <= pagination.totalPages) {
+                    onPageChange?.(v);
+                  } else {
+                    setPageInputValue(String(pagination.page));
+                  }
+                  pageInputFocused.current = false;
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              onBlur={() => {
+                pageInputFocused.current = false;
+                const v = parseInt(pageInputValue, 10);
+                if (!isNaN(v) && v >= 1 && v <= pagination.totalPages) {
+                  onPageChange?.(v);
+                } else {
+                  setPageInputValue(String(pagination.page));
+                }
+              }}
+              className="w-14 h-8 px-2 text-sm text-center font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amazon-orange/50 focus:border-amazon-orange transition-colors"
+            />
+            <span className="text-sm text-gray-600 dark:text-gray-400 mx-1">of {pagination.totalPages}</span>
 
             <button
               onClick={() => onPageChange?.(pagination.page + 1)}
@@ -1318,7 +1323,7 @@ export default function SmartGrid<T extends Record<string, unknown>>({
               }}
               className="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-amazon-orange/50 focus:border-amazon-orange transition-colors"
             >
-              {[25, 50, 100].map(size => (
+              {[5, 10, 25, 50, 100].map(size => (
                 <option key={size} value={size}>{size}</option>
               ))}
             </select>

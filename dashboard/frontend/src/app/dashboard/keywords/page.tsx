@@ -44,7 +44,7 @@ export default function KeywordsPage() {
   const [editBidValue, setEditBidValue] = useState<string>('');
   const [lockingKeyword, setLockingKeyword] = useState<number | null>(null);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(5);
   const [exporting, setExporting] = useState(false);
 
   const queryClient = useQueryClient();

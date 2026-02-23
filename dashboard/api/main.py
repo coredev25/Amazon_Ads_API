@@ -1740,7 +1740,7 @@ async def get_campaigns(
     portfolio_id: Optional[int] = Query(None, description="Filter by portfolio ID"),
     status: Optional[str] = Query(None, description="Filter by status: enabled, paused, archived, or omit for all"),
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=10, le=200, description="Items per page"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page"),
 ):
     """Get campaigns with performance data (paginated). Use either days or start_date+end_date."""
     try:
@@ -1961,7 +1961,7 @@ async def get_keywords(
     match_type: Optional[str] = Query(None, description="Filter by match type: exact, phrase, broad, or omit for all"),
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=10, le=200),
+    page_size: int = Query(50, ge=1, le=200),
 ):
     """Get keywords with performance data (server-side pagination)"""
     try:
@@ -2271,7 +2271,7 @@ async def get_product_targeting(
     state: Optional[str] = None,
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=10, le=200),
+    page_size: int = Query(50, ge=1, le=200),
 ):
     """Get product targeting data from DB with performance from keyword_performance."""
     try:
@@ -4086,7 +4086,7 @@ async def get_ads(
     ad_group_id: Optional[int] = None,
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=10, le=200),
+    page_size: int = Query(50, ge=1, le=200),
     state: Optional[str] = Query(None, description="Filter by state: enabled, paused, archived, or omit for all"),
 ):
     """Get product ads with performance data (paginated)"""
@@ -4190,7 +4190,7 @@ async def get_search_terms(
     min_clicks: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=2000),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=10, le=200),
+    page_size: int = Query(50, ge=1, le=200),
 ):
     """Get search terms (customer queries) with performance"""
     try:

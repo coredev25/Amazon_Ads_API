@@ -128,14 +128,14 @@ export default function HierarchicalCampaignManager() {
   
   // Pagination state per tab
   const [campaignPage, setCampaignPage] = useState(1);
-  const [campaignPageSize, setCampaignPageSize] = useState(50);
+  const [campaignPageSize, setCampaignPageSize] = useState(5);
   const [exportingCsv, setExportingCsv] = useState(false);
   const [adGroupPage, setAdGroupPage] = useState(1);
-  const [adGroupPageSize, setAdGroupPageSize] = useState(50);
+  const [adGroupPageSize, setAdGroupPageSize] = useState(5);
   const [adsPage, setAdsPage] = useState(1);
-  const [adsPageSize, setAdsPageSize] = useState(50);
+  const [adsPageSize, setAdsPageSize] = useState(5);
   const [keywordPage, setKeywordPage] = useState(1);
-  const [keywordPageSize, setKeywordPageSize] = useState(50);
+  const [keywordPageSize, setKeywordPageSize] = useState(5);
 
   const queryClient = useQueryClient();
   const days = useMemo(() => {
@@ -1627,7 +1627,9 @@ statusFilter={statusFilter}
       )}
 
       {/* Tab Content */}
-      {renderTabContent()}
+      <div key={activeTab}>
+        {renderTabContent()}
+      </div>
     </div>
   );
 }

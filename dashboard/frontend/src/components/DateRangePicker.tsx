@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight, X, Info } from 'lucide-react';
 import { cn } from '@/utils/helpers';
 
@@ -248,6 +248,32 @@ export default function DateRangePicker({ value, onChange, className }: DateRang
   const [rightCalendarMonth, setRightCalendarMonth] = useState(new Date().getMonth() + 1);
   const [rightCalendarYear, setRightCalendarYear] = useState(new Date().getFullYear());
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const updateDropdownPos = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const panelWidth = panelRef.current?.offsetWidth ?? 700;
+    const gap = 8;
+    let left = rect.left;
+    if (left + panelWidth > window.innerWidth - gap) left = window.innerWidth - panelWidth - gap;
+    if (left < gap) left = gap;
+    const top = rect.bottom + gap;
+    setDropdownPos({ top, left });
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) { setDropdownPos(null); return; }
+    requestAnimationFrame(updateDropdownPos);
+    window.addEventListener('scroll', updateDropdownPos, true);
+    window.addEventListener('resize', updateDropdownPos);
+    return () => {
+      window.removeEventListener('scroll', updateDropdownPos, true);
+      window.removeEventListener('resize', updateDropdownPos);
+    };
+  }, [isOpen, updateDropdownPos]);
 
   // Initialize calendar months
   useEffect(() => {
@@ -396,6 +422,7 @@ export default function DateRangePicker({ value, onChange, className }: DateRang
   return (
     <div className={cn('relative', className)} ref={dropdownRef}>
       <button
+        ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
           'flex w-full items-center gap-2.5 px-4 py-2.5 rounded-lg border transition-all duration-200',
@@ -419,7 +446,11 @@ export default function DateRangePicker({ value, onChange, className }: DateRang
       </button>
 
       {isOpen && (
-        <div className="absolute top-full right-0 mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-[100] overflow-hidden">
+        <div
+          ref={panelRef}
+          className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-[9999] overflow-hidden"
+          style={dropdownPos ? { top: dropdownPos.top, left: dropdownPos.left } : { visibility: 'hidden', top: 0, left: 0 }}
+        >
           <div className="flex">
             {/* Left Panel - Predefined Options */}
             <div className="w-64 border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">

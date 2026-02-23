@@ -9,34 +9,44 @@ export default function LoadingBar() {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const completeTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const doneDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const activeRef = useRef(false);
 
   useEffect(() => {
     if (isFetching > 0) {
-      // Start loading
-      setVisible(true);
-      setProgress(15);
+      if (doneDebounceRef.current) {
+        clearTimeout(doneDebounceRef.current);
+        doneDebounceRef.current = null;
+      }
 
-      // Simulate incremental progress
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = setInterval(() => {
-        setProgress(prev => {
-          if (prev >= 90) return prev;
-          // Slow down as we approach 90
-          const increment = Math.max(0.5, (90 - prev) * 0.08);
-          return Math.min(90, prev + increment);
-        });
-      }, 200);
-    } else {
-      // Complete
-      if (timerRef.current) clearInterval(timerRef.current);
-      setProgress(100);
+      if (!activeRef.current) {
+        activeRef.current = true;
+        setVisible(true);
+        setProgress(15);
 
-      // Hide after completion animation
-      if (completeTimerRef.current) clearTimeout(completeTimerRef.current);
-      completeTimerRef.current = setTimeout(() => {
-        setVisible(false);
-        setProgress(0);
-      }, 400);
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = setInterval(() => {
+          setProgress(prev => {
+            if (prev >= 90) return prev;
+            const increment = Math.max(0.5, (90 - prev) * 0.08);
+            return Math.min(90, prev + increment);
+          });
+        }, 200);
+      }
+    } else if (activeRef.current) {
+      if (doneDebounceRef.current) clearTimeout(doneDebounceRef.current);
+      doneDebounceRef.current = setTimeout(() => {
+        activeRef.current = false;
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = null;
+        setProgress(100);
+
+        if (completeTimerRef.current) clearTimeout(completeTimerRef.current);
+        completeTimerRef.current = setTimeout(() => {
+          setVisible(false);
+          setProgress(0);
+        }, 400);
+      }, 300);
     }
 
     return () => {

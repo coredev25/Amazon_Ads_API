@@ -34,7 +34,7 @@ export default function ProductTargetingPage() {
   const [stateFilter, setStateFilter] = useState<string>('all');
   const [selectedRows, setSelectedRows] = useState<Set<string | number>>(new Set());
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(5);
   
   const queryClient = useQueryClient();
 
