@@ -231,11 +231,12 @@ export default function KeywordsPage() {
     {
       key: 'keyword_text',
       header: 'Keyword',
+      width: 280,
       sortable: true,
       render: (value: unknown, row: Keyword) => (
-        <div className="max-w-xs">
-          <div className="flex items-center gap-2">
-            <p className="font-medium text-gray-900 dark:text-white truncate">{row.keyword_text}</p>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <p className="font-medium text-gray-900 dark:text-white truncate" title={row.keyword_text}>{row.keyword_text}</p>
             {row.is_locked && (
               <span title={row.lock_reason || 'Locked'}>
                 <Lock className="w-3 h-3 text-amber-400 flex-shrink-0" />
@@ -243,7 +244,7 @@ export default function KeywordsPage() {
             )}
           </div>
           {row.is_locked && (
-            <p className="text-xs text-amber-400/80 truncate">{row.lock_reason}</p>
+            <p className="text-xs text-amber-400/80 truncate" title={row.lock_reason || ''}>{row.lock_reason}</p>
           )}
         </div>
       ),
@@ -323,7 +324,7 @@ export default function KeywordsPage() {
     },
     {
       key: 'ai_suggested_bid',
-      header: 'AI Suggested',
+      header: 'Suggested bid',
       sortable: true,
       className: 'text-right',
       render: (value: unknown, row: Keyword) => {
