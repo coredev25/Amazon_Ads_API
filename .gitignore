@@ -9,6 +9,7 @@ reports/
 *.json
 !package.json
 !package-lock.json
+!**/tsconfig.json
 .vscode/
 .idea/
 # Keep the example CA certificate, but ignore custom ones
