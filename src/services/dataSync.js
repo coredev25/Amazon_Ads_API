@@ -1181,6 +1181,136 @@ class DataSyncService {
   }
 
   /**
+   * Sync ASIN-level performance data from the spAdvertisedProduct report.
+   * Aggregates across ad groups so each (asin, report_date) row is unique.
+   */
+  async syncAsinPerformance(reportDate) {
+    try {
+      logger.info(`📊 [ASIN PERF] Syncing ASIN performance for ${reportDate}...`);
+
+      const reportData = await this.client.getPerformanceData('productAds', reportDate, reportDate);
+
+      if (!reportData || reportData.length === 0) {
+        logger.warn(`⚠️  [ASIN PERF] No ASIN performance data returned for ${reportDate}`);
+        return 0;
+      }
+
+      logger.info(`📊 [ASIN PERF] Received ${reportData.length} records, aggregating by ASIN...`);
+
+      const dbDate = this.formatDateForDB(reportDate);
+
+      // Aggregate by ASIN since multiple ads can share the same ASIN
+      const asinMap = {};
+      for (const record of reportData) {
+        const asin = record.advertisedAsin || record.asin;
+        if (!asin) continue;
+
+        if (!asinMap[asin]) {
+          asinMap[asin] = {
+            impressions: 0,
+            clicks: 0,
+            cost: 0,
+            attributedSales7d: 0,
+            attributedConversions7d: 0,
+          };
+        }
+        asinMap[asin].impressions += (record.impressions || 0);
+        asinMap[asin].clicks += (record.clicks || 0);
+        asinMap[asin].cost += parseFloat(record.cost || 0);
+        asinMap[asin].attributedSales7d += parseFloat(record.sales7d || 0);
+        asinMap[asin].attributedConversions7d += (record.purchases7d || 0);
+      }
+
+      const asins = Object.keys(asinMap);
+      logger.info(`📊 [ASIN PERF] Aggregated to ${asins.length} unique ASINs, saving to database...`);
+
+      let synced = 0;
+      for (const asin of asins) {
+        const d = asinMap[asin];
+        try {
+          await db.query(
+            `INSERT INTO asin_performance (
+              asin, report_date, impressions, clicks, cost,
+              attributed_sales_7d, attributed_conversions_7d
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (asin, report_date)
+            DO UPDATE SET
+              impressions = $3,
+              clicks = $4,
+              cost = $5,
+              attributed_sales_7d = $6,
+              attributed_conversions_7d = $7,
+              updated_at = CURRENT_TIMESTAMP`,
+            [
+              asin,
+              dbDate,
+              d.impressions,
+              d.clicks,
+              d.cost,
+              d.attributedSales7d,
+              d.attributedConversions7d,
+            ]
+          );
+          synced++;
+        } catch (dbError) {
+          logger.error(`Error saving ASIN performance for ${asin}:`, dbError.message);
+        }
+
+        if (synced % 50 === 0 && synced > 0) {
+          logger.info(`📊 [ASIN PERF] Progress: ${synced}/${asins.length} ASINs saved`);
+        }
+      }
+
+      logger.info(`✅ [ASIN PERF] Successfully synced ${synced} ASIN performance records for ${reportDate}`);
+      return synced;
+    } catch (error) {
+      logger.error(`❌ [ASIN PERF] Error syncing ASIN performance:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Auto-seed discovered ASINs into asin_cogs with default values.
+   * Only inserts ASINs that don't already exist (ON CONFLICT DO NOTHING).
+   */
+  async syncAsinCogs() {
+    try {
+      logger.info('📋 [ASIN COGS] Seeding new ASINs into asin_cogs...');
+
+      // Collect all unique ASINs from product_ads
+      const result = await db.query(
+        `SELECT DISTINCT asin FROM product_ads WHERE asin IS NOT NULL AND asin != ''`
+      );
+
+      if (!result.rows.length) {
+        logger.info('📋 [ASIN COGS] No ASINs found in product_ads, skipping');
+        return 0;
+      }
+
+      let inserted = 0;
+      for (const row of result.rows) {
+        try {
+          const res = await db.query(
+            `INSERT INTO asin_cogs (asin, cogs, amazon_fees_percentage, notes, created_by)
+             VALUES ($1, 0, 0.15, 'Auto-seeded during sync', 'sync')
+             ON CONFLICT (asin) DO NOTHING`,
+            [row.asin]
+          );
+          if (res.rowCount > 0) inserted++;
+        } catch (dbError) {
+          logger.error(`Error seeding asin_cogs for ${row.asin}:`, dbError.message);
+        }
+      }
+
+      logger.info(`✅ [ASIN COGS] Seeded ${inserted} new ASINs (${result.rows.length} total discovered)`);
+      return inserted;
+    } catch (error) {
+      logger.error('❌ [ASIN COGS] Error seeding asin_cogs:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Log sync operation
    */
   async logSync(syncType, status, recordsProcessed, errorMessage = null, startTime) {
@@ -1209,7 +1339,7 @@ class DataSyncService {
    */
   async fullSync(daysBack = 7) {
     const startTime = new Date();
-    const totalRecords = { campaigns: 0, adGroups: 0, keywords: 0, productAds: 0, performance: 0 };
+    const totalRecords = { campaigns: 0, adGroups: 0, keywords: 0, productAds: 0, performance: 0, asinPerformance: 0, asinCogs: 0 };
 
     try {
       logger.info('═══════════════════════════════════════════════════════');
@@ -1264,6 +1394,13 @@ class DataSyncService {
         logger.warn(`⚠️  Product targets sync skipped: ${error.message}`);
       }
       
+      // Auto-seed discovered ASINs into asin_cogs
+      try {
+        totalRecords.asinCogs = await this.syncAsinCogs();
+      } catch (error) {
+        logger.warn(`⚠️  ASIN COGS seeding skipped: ${error.message}`);
+      }
+      
       logger.info(`✅ Metadata sync complete: ${totalRecords.campaigns} campaigns (SP+SB+SD), ${totalRecords.adGroups} ad groups, ${totalRecords.keywords} keywords, ${totalRecords.productAds} product ads`);
 
       // Sync performance data for the last N days
@@ -1297,14 +1434,19 @@ class DataSyncService {
           // Process campaigns first, then ad groups and keywords in parallel
           const campaignPerf = await this.syncCampaignPerformance(reportDate);
           
-          // Process ad groups and keywords in parallel
-          const [adGroupPerf, keywordPerf] = await Promise.all([
+          // Process ad groups, keywords, and ASIN performance in parallel
+          const [adGroupPerf, keywordPerf, asinPerf] = await Promise.all([
             this.syncAdGroupPerformance(reportDate),
-            this.syncKeywordPerformance(reportDate)
+            this.syncKeywordPerformance(reportDate),
+            this.syncAsinPerformance(reportDate).catch(err => {
+              logger.warn(`⚠️  ASIN performance sync skipped for ${displayDate}: ${err.message}`);
+              return 0;
+            })
           ]);
 
-          const dayTotal = campaignPerf + adGroupPerf + keywordPerf;
-          totalRecords.performance += dayTotal;
+          const dayTotal = campaignPerf + adGroupPerf + keywordPerf + asinPerf;
+          totalRecords.performance += campaignPerf + adGroupPerf + keywordPerf;
+          totalRecords.asinPerformance += asinPerf;
           
           logger.info(`✅ Day ${i + 1} complete: ${dayTotal} total records synced`);
         } catch (error) {
@@ -1328,6 +1470,8 @@ class DataSyncService {
       logger.info(`   • Keywords synced: ${totalRecords.keywords}`);
       logger.info(`   • Product Ads synced: ${totalRecords.productAds}`);
       logger.info(`   • Performance records: ${totalRecords.performance}`);
+      logger.info(`   • ASIN Performance records: ${totalRecords.asinPerformance}`);
+      logger.info(`   • ASIN COGS seeded: ${totalRecords.asinCogs}`);
       logger.info(`   • Total records: ${total}`);
       logger.info(`   • Duration: ${duration} seconds`);
       logger.info('═══════════════════════════════════════════════════════\n');

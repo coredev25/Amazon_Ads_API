@@ -1204,15 +1204,19 @@ class AmazonAdsClient {
       // spAdvertisedProduct with groupBy: ['advertiser']
       productAds: [
         'date',
+        'campaignId',
+        'campaignName',
         'adGroupId',
         'adGroupName',
         'adId',
-        'asin',
-        'sku',
-        'adStatus',
+        'advertisedAsin',
+        'advertisedSku',
         'impressions',
         'clicks',
         'cost',
+        'spend',
+        'costPerClick',
+        'clickThroughRate',
         'purchases1d',
         'purchases7d',
         'purchases14d',
@@ -1224,7 +1228,9 @@ class AmazonAdsClient {
         'unitsSoldClicks1d',
         'unitsSoldClicks7d',
         'unitsSoldClicks14d',
-        'unitsSoldClicks30d'
+        'unitsSoldClicks30d',
+        'acosClicks7d',
+        'roasClicks7d'
       ],
       // spTargeting with groupBy: ['targeting']
       targets: [

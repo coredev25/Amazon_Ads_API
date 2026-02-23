@@ -37,6 +37,8 @@ async function runSync() {
     console.log(`  - Keywords synced: ${result.keywords}`);
     console.log(`  - Product Ads synced: ${result.productAds || 0}`);
     console.log(`  - Performance records synced: ${result.performance}`);
+    console.log(`  - ASIN Performance records: ${result.asinPerformance || 0}`);
+    console.log(`  - ASIN COGS seeded: ${result.asinCogs || 0}`);
     console.log(`  - Total records: ${Object.values(result).reduce((a, b) => a + b, 0)}\n`);
 
     await db.close();
